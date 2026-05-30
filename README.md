@@ -3,7 +3,7 @@
 **Project codename:** `tabs-vs-spaces`  
 **Purpose:** A hands-on laboratory for distributed systems, load balancing, asynchronous processing, and chaos engineering—without the overhead of complex business logic.
 
-> **Document version:** 1.0 · **Last updated:** May 25, 2026 · **Maintained by:** Zoha Rahman
+> **Document version:** 1.0 · **Last updated:** May 25, 2026 · **Maintained by:** Azaz Ahamed Zoha
 
 ---
 
@@ -56,14 +56,14 @@ By splitting compute across **Proxmox LXC containers** and your **MacBook**, con
 
 ### Primary Skills
 
-| Skill domain | What you'll practice | Interview relevance |
-| --- | --- | --- |
-| **Load balancing** | Nginx upstream configuration, health checks, failover detection | "How would you handle traffic spikes?" |
-| **Stateless design** | APIs with zero local state, session externalization | "How do you scale horizontally?" |
-| **Async processing** | Producer–consumer patterns, message acknowledgments | "How do you handle slow operations?" |
-| **Database optimization** | Table partitioning, index strategies, connection pooling | "How do you handle write-heavy workloads?" |
-| **Chaos engineering** | Simulating failures, measuring recovery time | "What happens if a server goes down?" |
-| **Observability** | Metrics collection, log aggregation, alerting | "How do you debug production issues?" |
+| Skill domain              | What you'll practice                                            | Interview relevance                        |
+| ------------------------- | --------------------------------------------------------------- | ------------------------------------------ |
+| **Load balancing**        | Nginx upstream configuration, health checks, failover detection | "How would you handle traffic spikes?"     |
+| **Stateless design**      | APIs with zero local state, session externalization             | "How do you scale horizontally?"           |
+| **Async processing**      | Producer–consumer patterns, message acknowledgments             | "How do you handle slow operations?"       |
+| **Database optimization** | Table partitioning, index strategies, connection pooling        | "How do you handle write-heavy workloads?" |
+| **Chaos engineering**     | Simulating failures, measuring recovery time                    | "What happens if a server goes down?"      |
+| **Observability**         | Metrics collection, log aggregation, alerting                   | "How do you debug production issues?"      |
 
 ### System Design Concepts Covered
 
@@ -123,10 +123,10 @@ flowchart TB
 
 #### Why separate API from workers?
 
-| Problem | Solution | Interview answer |
-| --- | --- | --- |
-| PostgreSQL INSERT is slow (10–50 ms) | API returns **202 Accepted** in under 5 ms and enqueues work | "We decouple fast request handling from slow I/O to keep sub-10 ms responses under load." |
-| API waiting on DB caps at ~20–100 req/s per instance | Workers batch-insert 100 votes → 10,000+ writes/s | |
+| Problem                                              | Solution                                                     | Interview answer                                                                          |
+| ---------------------------------------------------- | ------------------------------------------------------------ | ----------------------------------------------------------------------------------------- |
+| PostgreSQL INSERT is slow (10–50 ms)                 | API returns **202 Accepted** in under 5 ms and enqueues work | "We decouple fast request handling from slow I/O to keep sub-10 ms responses under load." |
+| API waiting on DB caps at ~20–100 req/s per instance | Workers batch-insert 100 votes → 10,000+ writes/s            |                                                                                           |
 
 #### Why two workers?
 
@@ -142,13 +142,13 @@ If PostgreSQL and RabbitMQ run on your MacBook, disconnecting risks data loss. T
 
 ### Physical Layout
 
-| Component | Location | IP address | Role | Failure impact |
-| --- | --- | --- | --- | --- |
-| **LXC1** | Proxmox | `192.168.1.5` | Control plane | Critical — entire system down |
-| **LXC2** | Proxmox | `192.168.1.10` | API Zone A | Graceful — traffic shifts to MacBook |
-| **LXC3** | Proxmox | `192.168.1.15` | Worker 1 | Graceful — LXC4 continues |
-| **LXC4** | Proxmox | `192.168.1.16` | Worker 2 | Graceful — LXC3 continues |
-| **MacBook** | Laptop | `192.168.1.20` | API Zone B + frontend | Graceful — traffic shifts to LXC2 |
+| Component   | Location | IP address     | Role                  | Failure impact                       |
+| ----------- | -------- | -------------- | --------------------- | ------------------------------------ |
+| **LXC1**    | Proxmox  | `192.168.1.5`  | Control plane         | Critical — entire system down        |
+| **LXC2**    | Proxmox  | `192.168.1.10` | API Zone A            | Graceful — traffic shifts to MacBook |
+| **LXC3**    | Proxmox  | `192.168.1.15` | Worker 1              | Graceful — LXC4 continues            |
+| **LXC4**    | Proxmox  | `192.168.1.16` | Worker 2              | Graceful — LXC3 continues            |
+| **MacBook** | Laptop   | `192.168.1.20` | API Zone B + frontend | Graceful — traffic shifts to LXC2    |
 
 ### Network Topology
 
@@ -175,14 +175,14 @@ flowchart LR
 - **Same subnet:** All devices on `192.168.1.0/24` (or bridged via Twingate)
 - **Open ports:**
 
-| Port | Service | Exposure |
-| --- | --- | --- |
-| 80 / 443 | Nginx HTTP/HTTPS | Public |
-| 3000 | API instances | Internal |
-| 5432 | PostgreSQL | Internal only |
-| 5672 | RabbitMQ AMQP | Internal |
-| 15672 | RabbitMQ Management UI | Internal |
-| 6379 | Redis | Internal only |
+| Port     | Service                | Exposure      |
+| -------- | ---------------------- | ------------- |
+| 80 / 443 | Nginx HTTP/HTTPS       | Public        |
+| 3000     | API instances          | Internal      |
+| 5432     | PostgreSQL             | Internal only |
+| 5672     | RabbitMQ AMQP          | Internal      |
+| 15672    | RabbitMQ Management UI | Internal      |
+| 6379     | Redis                  | Internal only |
 
 ### LXC Container Specifications
 
@@ -200,26 +200,26 @@ CPU: 2 cores | RAM: 2 GB | Storage: 10 GB
 
 ### Core Services
 
-| Service | Technology | Version | Purpose |
-| --- | --- | --- | --- |
-| Load balancer | Nginx | 1.25+ | L7 routing, health checks, TLS termination |
-| API framework | NestJS | 10.x | Stateless HTTP server with DI |
-| Message broker | RabbitMQ | 3.13 | Durable queue with acknowledgments |
-| Database | PostgreSQL | 16.x | ACID storage with partitioning |
-| Cache | Redis | 7.2 | In-memory counters and rate limiting |
-| Frontend | Next.js | 14.x | SSR, real-time updates |
-| Container runtime | Docker | 24.x | Consistent deployments |
+| Service           | Technology | Version | Purpose                                    |
+| ----------------- | ---------- | ------- | ------------------------------------------ |
+| Load balancer     | Nginx      | 1.25+   | L7 routing, health checks, TLS termination |
+| API framework     | NestJS     | 10.x    | Stateless HTTP server with DI              |
+| Message broker    | RabbitMQ   | 3.13    | Durable queue with acknowledgments         |
+| Database          | PostgreSQL | 16.x    | ACID storage with partitioning             |
+| Cache             | Redis      | 7.2     | In-memory counters and rate limiting       |
+| Frontend          | Next.js    | 14.x    | SSR, real-time updates                     |
+| Container runtime | Docker     | 24.x    | Consistent deployments                     |
 
 ### Development Tools
 
-| Tool | Purpose |
-| --- | --- |
-| **k6** | Load testing and benchmarking |
-| **Artillery** | Scenario-based load testing |
-| **Prometheus** | Metrics collection |
-| **Grafana** | Dashboards and alerting |
-| **pgAdmin** | PostgreSQL management |
-| **WSL2** | Local development (Windows) |
+| Tool           | Purpose                       |
+| -------------- | ----------------------------- |
+| **k6**         | Load testing and benchmarking |
+| **Artillery**  | Scenario-based load testing   |
+| **Prometheus** | Metrics collection            |
+| **Grafana**    | Dashboards and alerting       |
+| **pgAdmin**    | PostgreSQL management         |
+| **WSL2**       | Local development (Windows)   |
 
 ---
 
@@ -284,12 +284,19 @@ tabs-vs-spaces/
 **File:** `api/src/votes/votes.controller.ts`
 
 ```typescript
-import { Controller, Post, Body, HttpCode, Logger, BadRequestException } from '@nestjs/common';
-import { RabbitMQService } from '../rabbitmq/rabbitmq.service';
-import { VoteDto } from './dto/vote.dto';
-import { voteCounter } from '../metrics/metrics.service';
+import {
+  Controller,
+  Post,
+  Body,
+  HttpCode,
+  Logger,
+  BadRequestException,
+} from "@nestjs/common";
+import { RabbitMQService } from "../rabbitmq/rabbitmq.service";
+import { VoteDto } from "./dto/vote.dto";
+import { voteCounter } from "../metrics/metrics.service";
 
-@Controller('votes')
+@Controller("votes")
 export class VotesController {
   private readonly logger = new Logger(VotesController.name);
 
@@ -300,29 +307,29 @@ export class VotesController {
   async ingest(@Body() voteDto: VoteDto) {
     const start = Date.now();
 
-    if (!['tabs', 'spaces'].includes(voteDto.choice)) {
-      throw new BadRequestException('Invalid choice');
+    if (!["tabs", "spaces"].includes(voteDto.choice)) {
+      throw new BadRequestException("Invalid choice");
     }
 
-    await this.rabbitmq.publish('votes.exchange', 'vote.cast', voteDto);
+    await this.rabbitmq.publish("votes.exchange", "vote.cast", voteDto);
 
     voteCounter.inc({
       choice: voteDto.choice,
-      zone: process.env.ZONE || 'unknown',
+      zone: process.env.ZONE || "unknown",
     });
 
     const duration = Date.now() - start;
     this.logger.debug(`Ingested vote in ${duration}ms`);
 
-    return { status: 'accepted', queued_at: new Date().toISOString() };
+    return { status: "accepted", queued_at: new Date().toISOString() };
   }
 }
 ```
 
-| Characteristic | Description |
-| --- | --- |
-| **Stateless** | No local state between requests |
-| **Fast** | Under 10 ms by avoiding database I/O |
+| Characteristic       | Description                                     |
+| -------------------- | ----------------------------------------------- |
+| **Stateless**        | No local state between requests                 |
+| **Fast**             | Under 10 ms by avoiding database I/O            |
 | **Idempotent-ready** | `user_id` on each vote for future deduplication |
 
 **Environment variables:**
@@ -340,9 +347,9 @@ PORT=3000
 **File:** `worker/src/consumer.ts`
 
 ```typescript
-import amqp from 'amqplib';
-import { Pool } from 'pg';
-import Redis from 'ioredis';
+import amqp from "amqplib";
+import { Pool } from "pg";
+import Redis from "ioredis";
 
 const BATCH_SIZE = 100;
 const BATCH_TIMEOUT = 1000; // 1 second
@@ -358,10 +365,10 @@ class VoteWorker {
   ) {}
 
   async start() {
-    await this.channel.assertQueue('votes.queue', { durable: true });
+    await this.channel.assertQueue("votes.queue", { durable: true });
     this.channel.prefetch(BATCH_SIZE);
 
-    this.channel.consume('votes.queue', async (msg) => {
+    this.channel.consume("votes.queue", async (msg) => {
       if (!msg) return;
 
       const vote = JSON.parse(msg.content.toString());
@@ -389,7 +396,7 @@ class VoteWorker {
 
     const values = batch
       .map((_, i) => `($${i * 3 + 1}, $${i * 3 + 2}, $${i * 3 + 3})`)
-      .join(',');
+      .join(",");
 
     const params = batch.flatMap((v) => [v.choice, v.user_id, v.timestamp]);
 
@@ -398,12 +405,12 @@ class VoteWorker {
       params,
     );
 
-    const tabsCount = batch.filter((v) => v.choice === 'tabs').length;
-    const spacesCount = batch.filter((v) => v.choice === 'spaces').length;
+    const tabsCount = batch.filter((v) => v.choice === "tabs").length;
+    const spacesCount = batch.filter((v) => v.choice === "spaces").length;
 
     await Promise.all([
-      this.redis.incrby('votes:tabs', tabsCount),
-      this.redis.incrby('votes:spaces', spacesCount),
+      this.redis.incrby("votes:tabs", tabsCount),
+      this.redis.incrby("votes:spaces", spacesCount),
     ]);
 
     console.log(`Flushed ${batch.length} votes to database`);
@@ -411,12 +418,12 @@ class VoteWorker {
 }
 ```
 
-| Detail | Behavior |
-| --- | --- |
-| **Batching** | Up to 100 votes per flush |
-| **Timeout** | Flush partial batch after 1 s |
+| Detail         | Behavior                                                                 |
+| -------------- | ------------------------------------------------------------------------ |
+| **Batching**   | Up to 100 votes per flush                                                |
+| **Timeout**    | Flush partial batch after 1 s                                            |
 | **ACK timing** | ACK after in-memory batch (not after DB) — higher throughput, crash risk |
-| **Redis** | Counters updated with DB flush |
+| **Redis**      | Counters updated with DB flush                                           |
 
 **Trade-off:** Early ACK can lose messages if the worker crashes between ACK and DB write. Acceptable for voting; use late ACK + idempotency for financial workloads.
 
@@ -475,7 +482,7 @@ export default function VotingPage() {
 **SSE stream:** `frontend/src/app/api/stream/route.ts`
 
 ```typescript
-import Redis from 'ioredis';
+import Redis from "ioredis";
 
 export async function GET() {
   const redis = new Redis(process.env.REDIS_URL);
@@ -484,14 +491,14 @@ export async function GET() {
     async start(controller) {
       const sendUpdate = async () => {
         const [tabs, spaces] = await Promise.all([
-          redis.get('votes:tabs'),
-          redis.get('votes:spaces'),
+          redis.get("votes:tabs"),
+          redis.get("votes:spaces"),
         ]);
 
         controller.enqueue(
           `data: ${JSON.stringify({
-            tabs: parseInt(tabs || '0'),
-            spaces: parseInt(spaces || '0'),
+            tabs: parseInt(tabs || "0"),
+            spaces: parseInt(spaces || "0"),
           })}\n\n`,
         );
       };
@@ -505,9 +512,9 @@ export async function GET() {
 
   return new Response(stream, {
     headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      Connection: 'keep-alive',
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
     },
   });
 }
@@ -524,7 +531,7 @@ export async function GET() {
 **File:** `docker-compose.yml`
 
 ```yaml
-version: '3.9'
+version: "3.9"
 
 services:
   postgres:
@@ -536,7 +543,7 @@ services:
     networks:
       - control-plane
     ports:
-      - '5432:5432'
+      - "5432:5432"
 
   rabbitmq:
     image: rabbitmq:3.13-management-alpine
@@ -546,15 +553,15 @@ services:
     networks:
       - control-plane
     ports:
-      - '5672:5672'
-      - '15672:15672'
+      - "5672:5672"
+      - "15672:15672"
 
   redis:
     image: redis:7.2-alpine
     networks:
       - control-plane
     ports:
-      - '6379:6379'
+      - "6379:6379"
 
   api:
     build: ./api
@@ -564,7 +571,7 @@ services:
     networks:
       - control-plane
     ports:
-      - '3000:3000'
+      - "3000:3000"
     depends_on:
       - rabbitmq
 
@@ -663,12 +670,12 @@ http {
 }
 ```
 
-| Directive | Effect |
-| --- | --- |
-| `proxy_next_upstream` | Retry next backend on 502/503/504 |
-| `max_fails=2` | Mark down after 2 failures |
-| `fail_timeout=5s` | Retry failed server after 5 s |
-| `X-Zone-Hit` | Log which backend served the request |
+| Directive             | Effect                               |
+| --------------------- | ------------------------------------ |
+| `proxy_next_upstream` | Retry next backend on 502/503/504    |
+| `max_fails=2`         | Mark down after 2 failures           |
+| `fail_timeout=5s`     | Retry failed server after 5 s        |
+| `X-Zone-Hit`          | Log which backend served the request |
 
 ---
 
@@ -677,10 +684,10 @@ http {
 **File:** `api/src/health/health.controller.ts`
 
 ```typescript
-import { Controller, Get, ServiceUnavailableException } from '@nestjs/common';
-import { RabbitMQService } from '../rabbitmq/rabbitmq.service';
+import { Controller, Get, ServiceUnavailableException } from "@nestjs/common";
+import { RabbitMQService } from "../rabbitmq/rabbitmq.service";
 
-@Controller('health')
+@Controller("health")
 export class HealthController {
   constructor(private readonly rabbitmq: RabbitMQService) {}
 
@@ -689,11 +696,11 @@ export class HealthController {
     const queueHealthy = await this.rabbitmq.isConnected();
 
     if (!queueHealthy) {
-      throw new ServiceUnavailableException('RabbitMQ unavailable');
+      throw new ServiceUnavailableException("RabbitMQ unavailable");
     }
 
     return {
-      status: 'ok',
+      status: "ok",
       zone: process.env.ZONE,
       timestamp: new Date().toISOString(),
     };
@@ -757,10 +764,10 @@ flowchart LR
     end
 ```
 
-| Strategy | Pros | Cons |
-| --- | --- | --- |
+| Strategy      | Pros                              | Cons                                   |
+| ------------- | --------------------------------- | -------------------------------------- |
 | **Early ACK** | Higher throughput; simpler errors | Loss if worker crashes before DB write |
-| **Late ACK** | Redelivery on crash | Lower throughput; needs idempotency |
+| **Late ACK**  | Redelivery on crash               | Lower throughput; needs idempotency    |
 
 **Interview insight:** For voting, prioritize throughput. For payments, use late ACK with idempotency keys.
 
@@ -783,10 +790,10 @@ async onModuleInit() {
 
 **Topic routing keys (future):**
 
-| Routing key | Purpose |
-| --- | --- |
-| `vote.cast` | Current voting |
-| `vote.undo` | Cancel vote (future) |
+| Routing key  | Purpose                       |
+| ------------ | ----------------------------- |
+| `vote.cast`  | Current voting                |
+| `vote.undo`  | Cancel vote (future)          |
 | `vote.audit` | Separate audit queue (future) |
 
 ---
@@ -876,20 +883,20 @@ GROUP BY choice;
 **File:** `worker/src/database.ts`
 
 ```typescript
-import { Pool } from 'pg';
+import { Pool } from "pg";
 
 export const pool = new Pool({
-  host: '192.168.1.5',
+  host: "192.168.1.5",
   port: 5432,
-  database: 'votes',
-  user: 'voteuser',
-  password: 'votepass',
+  database: "votes",
+  user: "voteuser",
+  password: "votepass",
   max: 20,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 2000,
 });
 
-pool.query('SELECT 1'); // warmup
+pool.query("SELECT 1"); // warmup
 ```
 
 ---
@@ -915,11 +922,11 @@ If a backend is down, comment it out in `upstreams.conf` and `nginx -s reload`.
 
 ### Load Distribution Algorithms
 
-| Algorithm | Nginx config | Use case |
-| --- | --- | --- |
-| **Round robin** | Default upstream | Equal backends — **recommended start** |
-| **Least connections** | `least_conn;` | Unequal backend capacity |
-| **IP hash** | `ip_hash;` | Sticky sessions (avoid for stateless APIs) |
+| Algorithm             | Nginx config     | Use case                                   |
+| --------------------- | ---------------- | ------------------------------------------ |
+| **Round robin**       | Default upstream | Equal backends — **recommended start**     |
+| **Least connections** | `least_conn;`    | Unequal backend capacity                   |
+| **IP hash**           | `ip_hash;`       | Sticky sessions (avoid for stateless APIs) |
 
 ```nginx
 # Least connections example
@@ -939,18 +946,18 @@ upstream api_backend {
 **File:** `api/src/metrics/metrics.service.ts`
 
 ```typescript
-import { Counter, Histogram, register } from 'prom-client';
+import { Counter, Histogram, register } from "prom-client";
 
 export const voteCounter = new Counter({
-  name: 'votes_ingested_total',
-  help: 'Total votes ingested',
-  labelNames: ['choice', 'zone'],
+  name: "votes_ingested_total",
+  help: "Total votes ingested",
+  labelNames: ["choice", "zone"],
 });
 
 export const responseTime = new Histogram({
-  name: 'http_request_duration_ms',
-  help: 'HTTP request latency',
-  labelNames: ['method', 'route', 'status'],
+  name: "http_request_duration_ms",
+  help: "HTTP request latency",
+  labelNames: ["method", "route", "status"],
   buckets: [1, 5, 10, 50, 100, 500, 1000],
 });
 ```
@@ -959,12 +966,12 @@ export const responseTime = new Histogram({
 
 ```typescript
 export const batchSize = new Histogram({
-  name: 'worker_batch_size',
+  name: "worker_batch_size",
   buckets: [10, 25, 50, 100, 200],
 });
 
 export const dbWriteDuration = new Histogram({
-  name: 'worker_db_write_duration_ms',
+  name: "worker_db_write_duration_ms",
   buckets: [10, 50, 100, 500, 1000, 5000],
 });
 ```
@@ -980,25 +987,25 @@ global:
 scrape_configs:
   - job_name: api-lxc2
     static_configs:
-      - targets: ['192.168.1.10:3000']
+      - targets: ["192.168.1.10:3000"]
         labels: { zone: lxc2 }
 
   - job_name: api-macbook
     static_configs:
-      - targets: ['192.168.1.20:3000']
+      - targets: ["192.168.1.20:3000"]
         labels: { zone: macbook }
 
   - job_name: worker-lxc3
     static_configs:
-      - targets: ['192.168.1.15:9090']
+      - targets: ["192.168.1.15:9090"]
 
   - job_name: worker-lxc4
     static_configs:
-      - targets: ['192.168.1.16:9090']
+      - targets: ["192.168.1.16:9090"]
 
   - job_name: rabbitmq
     static_configs:
-      - targets: ['192.168.1.5:15692']
+      - targets: ["192.168.1.5:15692"]
 ```
 
 ```bash
@@ -1013,12 +1020,12 @@ UI: `http://192.168.1.5:9091`
 
 Pre-built dashboard: `infra/grafana/dashboards/system-overview.json`
 
-| Panel | PromQL (example) |
-| --- | --- |
-| Votes ingested/s | `rate(votes_ingested_total[1m])` |
-| API p95 latency | `histogram_quantile(0.95, rate(http_request_duration_ms_bucket[5m]))` |
-| Queue depth | `rabbitmq_queue_messages{queue="votes.queue"}` |
-| DB write p99 | `histogram_quantile(0.99, rate(worker_db_write_duration_ms_bucket[5m]))` |
+| Panel            | PromQL (example)                                                         |
+| ---------------- | ------------------------------------------------------------------------ |
+| Votes ingested/s | `rate(votes_ingested_total[1m])`                                         |
+| API p95 latency  | `histogram_quantile(0.95, rate(http_request_duration_ms_bucket[5m]))`    |
+| Queue depth      | `rabbitmq_queue_messages{queue="votes.queue"}`                           |
+| DB write p99     | `histogram_quantile(0.99, rate(worker_db_write_duration_ms_bucket[5m]))` |
 
 ```bash
 docker run -d --name grafana -p 3003:3000 \
@@ -1036,7 +1043,7 @@ services:
   loki:
     image: grafana/loki:latest
     ports:
-      - '3100:3100'
+      - "3100:3100"
 
   promtail:
     image: grafana/promtail:latest
@@ -1057,14 +1064,14 @@ services:
 
 ### Test Suite Overview
 
-| Test | Failure mode | Expected behavior | Success criteria |
-| --- | --- | --- | --- |
-| **Zone failure** | Kill MacBook API | Traffic → LXC2 | Zero 5xx |
-| **Worker crash** | Kill LXC3 worker | LXC4 drains queue | No message loss (late ACK) / acceptable loss (early ACK) |
-| **Database slow** | `pg_sleep` on INSERT | Queue grows; API fast | API p95 under 50 ms |
-| **RabbitMQ restart** | `docker restart rabbitmq` | Workers reconnect | Messages persist |
-| **Network partition** | Block LXC2 → RabbitMQ | LXC2 unhealthy; removed from pool | No client-visible errors |
-| **Thundering herd** | 10k concurrent requests | Graceful degradation | p99 under 1 s |
+| Test                  | Failure mode              | Expected behavior                 | Success criteria                                         |
+| --------------------- | ------------------------- | --------------------------------- | -------------------------------------------------------- |
+| **Zone failure**      | Kill MacBook API          | Traffic → LXC2                    | Zero 5xx                                                 |
+| **Worker crash**      | Kill LXC3 worker          | LXC4 drains queue                 | No message loss (late ACK) / acceptable loss (early ACK) |
+| **Database slow**     | `pg_sleep` on INSERT      | Queue grows; API fast             | API p95 under 50 ms                                      |
+| **RabbitMQ restart**  | `docker restart rabbitmq` | Workers reconnect                 | Messages persist                                         |
+| **Network partition** | Block LXC2 → RabbitMQ     | LXC2 unhealthy; removed from pool | No client-visible errors                                 |
+| **Thundering herd**   | 10k concurrent requests   | Graceful degradation              | p99 under 1 s                                            |
 
 ### Test 1: Zone Failure (MacBook Disconnect)
 
@@ -1079,9 +1086,9 @@ watch -n 1 'curl -u admin:secret http://192.168.1.5:15672/api/queues/%2F/votes.q
 
 **Expected metrics:**
 
-| Phase | `api_lxc2` | `api_macbook` |
-| --- | --- | --- |
-| Before | ~500 req/s | ~500 req/s |
+| Phase         | `api_lxc2`  | `api_macbook`   |
+| ------------- | ----------- | --------------- |
+| Before        | ~500 req/s  | ~500 req/s      |
 | After failure | ~1000 req/s | 0 (marked down) |
 
 Recovery: under 10 s (`max_fails=2` × `fail_timeout=5s`)
@@ -1155,39 +1162,39 @@ sleep 30
 **File:** `infra/k6/vote-storm.js`
 
 ```javascript
-import http from 'k6/http';
-import { check, sleep } from 'k6';
+import http from "k6/http";
+import { check, sleep } from "k6";
 
 export const options = {
   stages: [
-    { duration: '30s', target: 100 },
-    { duration: '2m', target: 500 },
-    { duration: '5m', target: 1000 },
-    { duration: '2m', target: 2000 },
-    { duration: '1m', target: 0 },
+    { duration: "30s", target: 100 },
+    { duration: "2m", target: 500 },
+    { duration: "5m", target: 1000 },
+    { duration: "2m", target: 2000 },
+    { duration: "1m", target: 0 },
   ],
   thresholds: {
-    http_req_duration: ['p(95)<100', 'p(99)<500'],
-    http_req_failed: ['rate<0.01'],
+    http_req_duration: ["p(95)<100", "p(99)<500"],
+    http_req_failed: ["rate<0.01"],
   },
 };
 
-const BASE_URL = 'http://192.168.1.5';
+const BASE_URL = "http://192.168.1.5";
 
 export default function () {
   const payload = JSON.stringify({
-    choice: Math.random() > 0.5 ? 'tabs' : 'spaces',
+    choice: Math.random() > 0.5 ? "tabs" : "spaces",
     user_id: `k6-${__VU}-${__ITER}`,
   });
 
   const res = http.post(`${BASE_URL}/api/vote`, payload, {
-    headers: { 'Content-Type': 'application/json' },
+    headers: { "Content-Type": "application/json" },
   });
 
   check(res, {
-    'status 202': (r) => r.status === 202,
-    'response time OK': (r) => r.timings.duration < 200,
-    'has zone header': (r) => r.headers['X-Zone-Hit'] !== undefined,
+    "status 202": (r) => r.status === 202,
+    "response time OK": (r) => r.timings.duration < 200,
+    "has zone header": (r) => r.headers["X-Zone-Hit"] !== undefined,
   });
 
   sleep(1);
@@ -1270,15 +1277,15 @@ Run Section 13 tests; document in `CHAOS_RESULTS.md`; tune batch size, workers, 
 
 ## 15. Future Expansions
 
-| Expansion | Summary |
-| --- | --- |
-| **Multi-region** | Zone C/D on AWS; central queue; measure cross-region latency |
-| **Read replicas** | Postgres streaming replication; worker writes primary, analytics reads replica |
-| **Auth & rate limits** | JWT + Redis daily vote caps per user |
-| **Kafka** | Event streaming with partition-by-`choice`; replay and consumer groups |
-| **API gateway** | Kong/Envoy for rate limiting, plugins, service discovery |
-| **Blue/green** | Parallel upstreams; switch `proxy_pass` after smoke tests |
-| **Financial ledger** | Idempotency keys, late ACK, ACID batches, audit topic, reconciliation job |
+| Expansion              | Summary                                                                        |
+| ---------------------- | ------------------------------------------------------------------------------ |
+| **Multi-region**       | Zone C/D on AWS; central queue; measure cross-region latency                   |
+| **Read replicas**      | Postgres streaming replication; worker writes primary, analytics reads replica |
+| **Auth & rate limits** | JWT + Redis daily vote caps per user                                           |
+| **Kafka**              | Event streaming with partition-by-`choice`; replay and consumer groups         |
+| **API gateway**        | Kong/Envoy for rate limiting, plugins, service discovery                       |
+| **Blue/green**         | Parallel upstreams; switch `proxy_pass` after smoke tests                      |
+| **Financial ledger**   | Idempotency keys, late ACK, ACID batches, audit topic, reconciliation job      |
 
 ---
 
@@ -1305,10 +1312,10 @@ docker exec rabbitmq rabbitmqadmin publish \
 psql -U voteuser -d votes -c "SELECT * FROM votes WHERE user_id='test';"
 ```
 
-| Queue `messages` | Likely cause |
-| --- | --- |
-| 0 | API not publishing |
-| High | Workers not consuming |
+| Queue `messages` | Likely cause          |
+| ---------------- | --------------------- |
+| 0                | API not publishing    |
+| High             | Workers not consuming |
 
 ---
 
@@ -1409,13 +1416,13 @@ open http://192.168.1.5:15672  # RabbitMQ Management
 
 ### Appendix B: Environment Variables
 
-| Variable | Service | Example | Purpose |
-| --- | --- | --- | --- |
-| `RABBITMQ_URL` | API, Worker | `amqp://admin:secret@192.168.1.5:5672` | Broker connection |
-| `DATABASE_URL` | Worker | `postgresql://voteuser:votepass@192.168.1.5:5432/votes` | Postgres |
-| `REDIS_URL` | Worker, Frontend | `redis://192.168.1.5:6379` | Counters / SSE |
-| `ZONE` | API | `lxc2` or `macbook` | Zone label for metrics |
-| `PORT` | API | `3000` | HTTP listen port |
+| Variable       | Service          | Example                                                 | Purpose                |
+| -------------- | ---------------- | ------------------------------------------------------- | ---------------------- |
+| `RABBITMQ_URL` | API, Worker      | `amqp://admin:secret@192.168.1.5:5672`                  | Broker connection      |
+| `DATABASE_URL` | Worker           | `postgresql://voteuser:votepass@192.168.1.5:5432/votes` | Postgres               |
+| `REDIS_URL`    | Worker, Frontend | `redis://192.168.1.5:6379`                              | Counters / SSE         |
+| `ZONE`         | API              | `lxc2` or `macbook`                                     | Zone label for metrics |
+| `PORT`         | API              | `3000`                                                  | HTTP listen port       |
 
 ---
 

@@ -1,0 +1,90 @@
+services:
+# ---Infra Services ------------------------------------------------
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: rabbitmq
+    hostname: rabbitmq
+    ports:
+      - "5672:5672"   # AMQP port
+      - "15672:15672" # Management UI
+    environment:
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: secret
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    hostname: postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: votes
+      POSTGRES_USER: voteuser
+      POSTGRES_PASSWORD: votepass
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/sql:/docker-entrypoint-initdb.d 
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U voteuser -d votes"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      
+  # ---Services ------------------------------------------------
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile.dev   # We'll add this below
+    container_name: api
+    ports:
+      - "3000:3000"
+    environment:
+      RABBITMQ_URL: amqp://admin:secret@rabbitmq:5672
+      PORT: 3000
+      ZONE: local
+    volumes:
+      - ./api/src:/app/src   # Hot reload in dev
+    networks:
+      - app-network
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+  worker:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile.dev
+    container_name: worker
+    environment:
+      RABBITMQ_URL: amqp://admin:secret@rabbitmq:5672
+      DATABASE_URL: postgresql://voteuser:votepass@postgres:5432/votes
+      REDIS_URL: ""          # Empty for now, adding Redis later
+      WORKER_ID: worker-local
+      BATCH_SIZE: "100"
+      BATCH_TIMEOUT_MS: "1000"
+    volumes:
+      - ./worker/src:/app/src
+    networks:
+      - app-network
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  rabbitmq_data:
+  postgres_data:
