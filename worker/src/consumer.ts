@@ -3,6 +3,7 @@ import { ChannelWrapper } from "amqp-connection-manager";
 import { ConsumeMessage } from "amqplib";
 import { config } from "./config";
 import { batchInsertVotes, refreshTotals, VoteRecord } from "./database";
+import { incrementCounters } from "./redis";
 
 export class VoteConsumer {
   private connection!: amqp.AmqpConnectionManager;
@@ -144,6 +145,10 @@ export class VoteConsumer {
 
       this.totalProcessed += inserted;
       this.flushCount++;
+
+      await incrementCounters(votes).catch((err) =>
+        console.warn("[Consumer] Redis increment failed:", err.message),
+      );
 
       console.log(
         `[Consumer] Flushed ${inserted}/${votes.length} votes | ` +

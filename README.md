@@ -3,15 +3,15 @@
 **Project codename:** `tabs-vs-spaces`  
 **Purpose:** A hands-on laboratory for distributed systems, load balancing, asynchronous processing, and chaos engineering—without the overhead of complex business logic.
 
-> **Document version:** 1.1 · **Last updated:** June 1, 2026 · **Maintained by:** Azaz Ahamed Zoha
+> **Document version:** 1.2 · **Last updated:** June 1, 2026 · **Maintained by:** Azaz Ahamed Zoha
 
 > **Implementation status (June 2026)**
 >
 > | Status | Components |
 > | ------ | ---------- |
-> | **Implemented** | NestJS API (`POST /votes`), RabbitMQ ingest, worker batch consumer, PostgreSQL partitioned writes, `vote_totals` materialized view, `/health`, `/metrics`, local Docker Compose stack |
-> | **In progress** | Frontend voting UI |
-> | **Planned (roadmap)** | Redis live counters, SSE stream, Nginx multi-zone LB, Prometheus/Grafana/k6, Proxmox deployment, chaos test suite |
+> | **Implemented** | NestJS API (`POST /votes`), RabbitMQ ingest, worker batch consumer, PostgreSQL partitioned writes, `vote_totals` materialized view, Redis live counters (worker), `/health`, `/metrics`, local Docker Compose stack |
+> | **In progress** | Frontend voting UI, SSE stream |
+> | **Planned (roadmap)** | Nginx multi-zone LB, Prometheus/Grafana/k6, Proxmox deployment, chaos test suite |
 >
 > Sections marked **(implemented)** reflect the current repo. Sections marked **(planned)** describe the target Proxmox/chaos architecture — intent unchanged, not all files exist yet.
 
@@ -125,11 +125,12 @@ flowchart TB
     RMQ --> W2
     W1 -->|Batch insert| PG
     W2 -->|Batch insert| PG
-    W1 -.->|Planned| Redis
-    W2 -.->|Planned| Redis
+    W1 -->|INCRBY counters| Redis
+    W2 -->|INCRBY counters| Redis
+    SSE["Frontend SSE"] -.->|Planned| Redis
 ```
 
-**Current local stack:** workers persist to PostgreSQL and refresh the `vote_totals` materialized view (every 10 flushes). Redis + SSE (dashed lines) are the planned real-time read path for the frontend — not wired yet.
+**Current local stack:** workers persist to PostgreSQL, refresh `vote_totals` (debounced), and increment Redis counters (`votes:tabs`, `votes:spaces`) after each successful batch flush. SSE from Redis to the browser is **planned** (see §7.3).
 
 ### Design Decisions & Rationale
 
@@ -218,7 +219,7 @@ CPU: 2 cores | RAM: 2 GB | Storage: 10 GB
 | API framework     | NestJS     | 11.x    | Stateless HTTP server with DI              | Implemented |
 | Message broker    | RabbitMQ   | 3.13    | Durable queue with acknowledgments         | Implemented |
 | Database          | PostgreSQL | 16.x    | ACID storage with native range partitioning | Implemented |
-| Cache             | Redis      | 7.2+    | In-memory counters and rate limiting       | Planned     |
+| Cache             | Redis      | 7.2+    | In-memory counters (worker `INCRBY`)       | Partial     |
 | Frontend          | Next.js    | 16.x    | SSR, real-time updates                     | Scaffolded  |
 | Worker runtime    | tsx        | 4.x     | TypeScript dev runner with watch mode      | Implemented |
 | Container runtime | Docker     | 24.x+   | Consistent deployments                     | Implemented |
@@ -355,7 +356,7 @@ PORT=3000
 
 ### 7.2 Worker Service (Consumer Layer) — **implemented**
 
-Uses `amqp-connection-manager` (auto-reconnect), `VoteConsumer` class, and `tsx watch` for dev. No Redis yet — totals go through PostgreSQL's `vote_totals` materialized view.
+Uses `amqp-connection-manager` (auto-reconnect), `VoteConsumer` class, `tsx watch` for dev, and **Redis** for live counter updates via `worker/src/redis.ts`.
 
 **File:** `worker/src/consumer.ts` (excerpt)
 
@@ -410,13 +411,31 @@ await pool.query(query, values);
 | **Batching**   | Up to 100 votes per flush (`BATCH_SIZE`)                                 |
 | **Timeout**    | Flush partial batch after 1 s (`BATCH_TIMEOUT_MS`)                       |
 | **ACK timing** | ACK after in-memory batch (not after DB) — higher throughput, crash risk |
-| **Totals**     | `REFRESH MATERIALIZED VIEW CONCURRENTLY vote_totals` every 10 flushes    |
+| **Totals (DB)**  | Debounced `REFRESH MATERIALIZED VIEW CONCURRENTLY vote_totals` after flushes |
+| **Totals (Redis)** | Pipeline `INCRBY votes:tabs` / `votes:spaces` after successful DB flush   |
+| **Redis startup** | `connectRedis()` at boot (`lazyConnect` + explicit connect for startup log) |
 | **Partitions** | `ensurePartitionExists()` at startup + hourly for tomorrow               |
 | **Dev runner** | `tsx watch src/main.ts` (replaces ts-node-dev)                           |
 
-**Trade-off:** Early ACK can lose messages if the worker crashes between ACK and DB write. Acceptable for voting; use late ACK + idempotency for financial workloads (industry standard per competing-consumer patterns).
+**Trade-off (early ACK):** ACK after in-memory batch (not after DB) — higher throughput, crash risk. Acceptable for voting; use late ACK + idempotency for financial workloads.
 
-**Planned enhancement:** Redis `INCRBY` counters on flush for sub-second frontend reads (see §7.3).
+#### Redis dual-write concerns
+
+PostgreSQL is the **source of truth**; Redis is a **fast read cache** for the frontend. The worker writes Postgres first, then Redis — which is the correct order, but introduces known trade-offs worth documenting:
+
+| Concern | What happens | Severity (this project) |
+| ------- | ------------ | ------------------------- |
+| **Counter drift** | If `incrementCounters` fails (Redis down, network blip), Postgres has the vote but Redis totals lag. Failures are logged and non-fatal. | Medium for live UI; low for lab |
+| **Batch vs inserted count** | Redis increments from the full batch; `ON CONFLICT DO NOTHING` may insert fewer rows. Redis can **over-count** vs Postgres on duplicate messages. | Low while duplicates are rare |
+| **No rebuild on startup** | A fresh Redis volume starts counters at 0 while Postgres retains history. No sync-from-`vote_totals` job exists yet. | Medium after Redis wipe/redeploy |
+| **Dual sources** | `vote_totals` (Postgres MV) and Redis keys can disagree until reconciliation. | Expected until frontend picks one path |
+| **Optional at startup** | Redis failure at boot logs a warning; worker continues (Postgres-only mode). | Fine for resilience; confusing for debugging |
+
+**When this design is ideal:** local dev, chaos experiments, learning competing consumers — Postgres durability with sub-second display targets.
+
+**When to harden (before production UI):** increment from **actually inserted** rows (not raw batch size), add a startup job to seed Redis from `vote_totals` when keys are missing, and/or treat Redis as a TTL cache with Postgres fallback for reads.
+
+See §7.3 for the planned SSE read path off Redis.
 
 ---
 
@@ -461,7 +480,7 @@ export async function GET() {
 }
 ```
 
-**Interim read path (implemented today):** query `vote_totals` materialized view in PostgreSQL until Redis + SSE land.
+**Interim read path:** query `vote_totals` in PostgreSQL, or `GET votes:tabs` / `GET votes:spaces` in Redis (`redis-cli`). SSE wiring is planned. If Redis was recently wiped, counters may be lower than Postgres — see §7.2.
 
 **Real-time strategy (target):** SSE polls Redis every 500 ms — sub-second latency without WebSocket complexity. Aspirational standard: expose queue depth and consumer lag in Prometheus alongside UI latency (see §12).
 
@@ -500,6 +519,15 @@ services:
     networks:
       - app-network
 
+  redis:
+    image: redis:7.2-alpine
+    ports:
+      - "6379:6379"
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+
   api:
     build:
       context: ./api
@@ -526,6 +554,7 @@ services:
       WORKER_ID: worker-local
       BATCH_SIZE: "100"
       BATCH_TIMEOUT_MS: "1000"
+      REDIS_URL: redis://redis:6379
     volumes:
       - ./worker/src:/app/src
     depends_on:
@@ -533,13 +562,15 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
 
 networks:
   app-network:
     driver: bridge
 ```
 
-> **Note:** Redis is not in local compose yet (`REDIS_URL` reserved for future). Production Proxmox layout below is unchanged in intent.
+> **Note:** After adding npm dependencies to `worker/`, rebuild the image (`docker compose build worker`) and recreate the container — only `src/` is bind-mounted; `node_modules` lives in the image.
 
 **Production:** Services run on separate machines—no shared Docker networks. LXC1 exposes stateful ports; compute nodes use host IPs.
 
@@ -689,17 +720,17 @@ sequenceDiagram
     Worker->>Worker: Add to batch · ACK
     Note over Worker: Flush at 100 votes or 1 s
     Worker->>PostgreSQL: Batch INSERT into votes
-    Note over Worker,PostgreSQL: Every 10 flushes
-    Worker->>PostgreSQL: REFRESH vote_totals
+    Worker->>PostgreSQL: REFRESH vote_totals (debounced)
+    Worker->>Redis: INCRBY votes:tabs / votes:spaces
 
-    participant Redis as Redis (planned)
     participant SSE as Frontend SSE (planned)
-    Worker-.->Redis: INCRBY counters (planned)
     loop Every 500 ms (planned)
         SSE-.->Redis: GET votes:tabs / votes:spaces
         SSE-->>User: SSE event
     end
 ```
+
+> See **§7.2 Redis dual-write concerns** for drift, duplicate, and rebuild risks between Postgres and Redis.
 
 > **Nginx routing** is planned for Proxmox — local dev hits `POST http://localhost:3000/votes` directly. Planned Nginx exposes `/votes` and optional legacy alias `/api/vote`.
 
@@ -1197,7 +1228,7 @@ curl -X POST http://localhost:3000/votes \
   -d '{"choice":"tabs","user_id":"550e8400-e29b-41d4-a716-446655440000"}'
 ```
 
-**Milestone:** Votes flow API → queue → worker → Postgres. Verify with `\d+ votes` and `SELECT * FROM vote_totals;`. Redis UI and SSE come in a later phase.
+**Milestone:** Votes flow API → queue → worker → Postgres + Redis. Verify with `SELECT * FROM vote_totals;` and `redis-cli GET votes:tabs`. See §7.2 if Redis and Postgres totals disagree.
 
 ---
 
@@ -1394,7 +1425,7 @@ open http://192.168.1.5:15672  # RabbitMQ Management
 | `BATCH_TIMEOUT_MS`   | Worker      | `1000`                                                  | Partial batch timeout            | Implemented |
 | `RABBITMQ_PREFETCH`  | Worker      | `100`                                                   | Max unacked messages             | Implemented |
 | `PORT`               | API         | `3000`                                                  | HTTP listen port                 | Implemented |
-| `REDIS_URL`          | Worker, Frontend | `redis://192.168.1.5:6379`                         | Counters / SSE                   | Planned     |
+| `REDIS_URL`          | Worker, Frontend | `redis://redis:6379`                                    | Live counters / SSE              | Worker: implemented |
 
 See `api/.env.example` and `worker/.env.example` for local defaults.
 
@@ -1404,9 +1435,9 @@ See `api/.env.example` and `worker/.env.example` for local defaults.
 
 This project turns abstract system design into measurable engineering: load balancing with failover, async competing consumers, time-partitioned writes, chaos tests with recovery times, and dashboards backed by real metrics.
 
-**Today (Phase 1):** a vote travels API → RabbitMQ → worker → PostgreSQL, with `vote_totals` refreshed periodically.
+**Today (Phase 1):** a vote travels API → RabbitMQ → worker → PostgreSQL, with debounced `vote_totals` refresh and Redis counter increments. Postgres is authoritative; Redis is a fast display cache with known dual-write trade-offs (§7.2).
 
-**Target (Phases 2–5):** add Redis → SSE for live UI, Nginx multi-zone routing, full observability stack, and Proxmox chaos testing — intent unchanged.
+**Target (Phases 2–5):** SSE live UI, Nginx multi-zone routing, full observability stack, and Proxmox chaos testing — intent unchanged.
 
 The stack is intentionally heavier than a voting app needs—because the goal is to practice patterns that scale to ledgers, feeds, and event platforms.
 

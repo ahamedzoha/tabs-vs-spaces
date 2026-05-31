@@ -22,4 +22,7 @@ export const config = {
     batchSize: parseInt(process.env.BATCH_SIZE || "100", 10),
     batchTimeoutMs: parseInt(process.env.BATCH_TIMEOUT_MS || "1000", 10),
   },
+  redis: {
+    url: process.env.REDIS_URL || "redis://localhost:6379",
+  },
 };

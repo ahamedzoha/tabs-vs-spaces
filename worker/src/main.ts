@@ -1,5 +1,6 @@
 import { VoteConsumer } from "./consumer";
 import { ensurePartitionExists, getPool } from "./database";
+import { closeRedis, connectRedis } from "./redis";
 
 async function bootstrap() {
   console.log("[Main] Tabs vs Spaces — Vote Worker");
@@ -35,6 +36,16 @@ async function bootstrap() {
   await ensurePartitionExists(today);
   await ensurePartitionExists(tomorrow);
 
+  // ─── Redis (optional — counters for live frontend reads) ───────────────────
+  try {
+    await connectRedis();
+  } catch (err) {
+    console.warn(
+      "[Main] Redis unavailable — worker continues without live counters:",
+      err instanceof Error ? err.message : err,
+    );
+  }
+
   // ─── Start consumer ───────────────────────────────────────────────────────
   const consumer = new VoteConsumer();
   await consumer.start();
@@ -44,6 +55,7 @@ async function bootstrap() {
     console.log(`\n[Main] Received ${signal}. Flushing and shutting down...`);
     await consumer.stop();
     await getPool().end();
+    await closeRedis();
     process.exit(0);
   };
 
