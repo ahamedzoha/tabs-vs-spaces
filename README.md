@@ -3,7 +3,17 @@
 **Project codename:** `tabs-vs-spaces`  
 **Purpose:** A hands-on laboratory for distributed systems, load balancing, asynchronous processing, and chaos engineering—without the overhead of complex business logic.
 
-> **Document version:** 1.0 · **Last updated:** May 25, 2026 · **Maintained by:** Azaz Ahamed Zoha
+> **Document version:** 1.1 · **Last updated:** June 1, 2026 · **Maintained by:** Azaz Ahamed Zoha
+
+> **Implementation status (June 2026)**
+>
+> | Status | Components |
+> | ------ | ---------- |
+> | **Implemented** | NestJS API (`POST /votes`), RabbitMQ ingest, worker batch consumer, PostgreSQL partitioned writes, `vote_totals` materialized view, `/health`, `/metrics`, local Docker Compose stack |
+> | **In progress** | Frontend voting UI |
+> | **Planned (roadmap)** | Redis live counters, SSE stream, Nginx multi-zone LB, Prometheus/Grafana/k6, Proxmox deployment, chaos test suite |
+>
+> Sections marked **(implemented)** reflect the current repo. Sections marked **(planned)** describe the target Proxmox/chaos architecture — intent unchanged, not all files exist yet.
 
 ---
 
@@ -115,9 +125,11 @@ flowchart TB
     RMQ --> W2
     W1 -->|Batch insert| PG
     W2 -->|Batch insert| PG
-    W1 -->|Counters| Redis
-    W2 -->|Counters| Redis
+    W1 -.->|Planned| Redis
+    W2 -.->|Planned| Redis
 ```
+
+**Current local stack:** workers persist to PostgreSQL and refresh the `vote_totals` materialized view (every 10 flushes). Redis + SSE (dashed lines) are the planned real-time read path for the frontend — not wired yet.
 
 ### Design Decisions & Rationale
 
@@ -200,15 +212,16 @@ CPU: 2 cores | RAM: 2 GB | Storage: 10 GB
 
 ### Core Services
 
-| Service           | Technology | Version | Purpose                                    |
-| ----------------- | ---------- | ------- | ------------------------------------------ |
-| Load balancer     | Nginx      | 1.25+   | L7 routing, health checks, TLS termination |
-| API framework     | NestJS     | 10.x    | Stateless HTTP server with DI              |
-| Message broker    | RabbitMQ   | 3.13    | Durable queue with acknowledgments         |
-| Database          | PostgreSQL | 16.x    | ACID storage with partitioning             |
-| Cache             | Redis      | 7.2     | In-memory counters and rate limiting       |
-| Frontend          | Next.js    | 14.x    | SSR, real-time updates                     |
-| Container runtime | Docker     | 24.x    | Consistent deployments                     |
+| Service           | Technology | Version | Purpose                                    | Status      |
+| ----------------- | ---------- | ------- | ------------------------------------------ | ----------- |
+| Load balancer     | Nginx      | 1.25+   | L7 routing, health checks, TLS termination | Planned     |
+| API framework     | NestJS     | 11.x    | Stateless HTTP server with DI              | Implemented |
+| Message broker    | RabbitMQ   | 3.13    | Durable queue with acknowledgments         | Implemented |
+| Database          | PostgreSQL | 16.x    | ACID storage with native range partitioning | Implemented |
+| Cache             | Redis      | 7.2+    | In-memory counters and rate limiting       | Planned     |
+| Frontend          | Next.js    | 16.x    | SSR, real-time updates                     | Scaffolded  |
+| Worker runtime    | tsx        | 4.x     | TypeScript dev runner with watch mode      | Implemented |
+| Container runtime | Docker     | 24.x+   | Consistent deployments                     | Implemented |
 
 ### Development Tools
 
@@ -227,45 +240,41 @@ CPU: 2 cores | RAM: 2 GB | Storage: 10 GB
 
 ```
 tabs-vs-spaces/
-├── frontend/                   # Next.js application
-│   ├── src/
-│   │   ├── app/               # App router pages
-│   │   ├── components/        # React components
-│   │   └── lib/               # SSE client, API helpers
-│   ├── public/
-│   ├── package.json
-│   └── Dockerfile
+├── frontend/                   # Next.js application (scaffold — voting UI planned)
+│   ├── src/app/               # App router (page.tsx, layout.tsx)
+│   └── package.json
 │
-├── api/                        # NestJS API
+├── api/                        # NestJS API (implemented)
 │   ├── src/
-│   │   ├── votes/
+│   │   ├── votes/             # Controller + service + DTO
+│   │   ├── rabbitmq/          # amqp-connection-manager publisher
 │   │   ├── health/
 │   │   ├── metrics/
 │   │   └── main.ts
-│   ├── test/
-│   ├── package.json
-│   └── Dockerfile
+│   ├── Dockerfile
+│   ├── Dockerfile.dev
+│   └── package.json
 │
-├── worker/                     # Background consumer
+├── worker/                     # Background consumer (implemented)
 │   ├── src/
-│   │   ├── consumer.ts
-│   │   ├── database.ts
+│   │   ├── consumer.ts        # VoteConsumer — batch + RabbitMQ
+│   │   ├── database.ts        # Pool, partitions, batch INSERT
+│   │   ├── config.ts
 │   │   └── main.ts
-│   ├── package.json
-│   └── Dockerfile
+│   ├── Dockerfile
+│   ├── Dockerfile.dev
+│   └── package.json
 │
 ├── infra/
-│   ├── nginx/
-│   ├── sql/
-│   ├── k6/
-│   ├── prometheus/
-│   └── grafana/
+│   ├── sql/                   # Postgres schema + seed partitions (implemented)
+│   ├── nginx/                 # (planned) multi-zone upstream config
+│   ├── k6/                    # (planned) load tests
+│   ├── prometheus/            # (planned) scrape configs
+│   └── grafana/               # (planned) dashboards
 │
-├── .github/workflows/
-├── docker-compose.yml
-├── docker-compose.prod.yml
-├── README.md                   # This document
-└── ARCHITECTURE.md             # Optional deep-dive copy
+├── docker-compose.yml          # Local dev stack (implemented)
+├── docker-compose.prod.yml     # (planned) Proxmox control-plane compose
+└── README.md                   # This document
 ```
 
 ### Key Design Principles
@@ -279,50 +288,50 @@ tabs-vs-spaces/
 
 ## 7. Component Design
 
-### 7.1 API Service (Ingestion Layer)
+### 7.1 API Service (Ingestion Layer) — **implemented**
+
+Validation lives in the DTO; business logic in `VotesService`; RabbitMQ in `RabbitmqService`.
 
 **File:** `api/src/votes/votes.controller.ts`
 
 ```typescript
-import {
-  Controller,
-  Post,
-  Body,
-  HttpCode,
-  Logger,
-  BadRequestException,
-} from "@nestjs/common";
-import { RabbitMQService } from "../rabbitmq/rabbitmq.service";
-import { VoteDto } from "./dto/vote.dto";
-import { voteCounter } from "../metrics/metrics.service";
-
 @Controller("votes")
 export class VotesController {
-  private readonly logger = new Logger(VotesController.name);
-
-  constructor(private readonly rabbitmq: RabbitMQService) {}
+  constructor(private readonly votesService: VotesService) {}
 
   @Post()
-  @HttpCode(202)
-  async ingest(@Body() voteDto: VoteDto) {
-    const start = Date.now();
-
-    if (!["tabs", "spaces"].includes(voteDto.choice)) {
-      throw new BadRequestException("Invalid choice");
-    }
-
-    await this.rabbitmq.publish("votes.exchange", "vote.cast", voteDto);
-
-    voteCounter.inc({
-      choice: voteDto.choice,
-      zone: process.env.ZONE || "unknown",
-    });
-
-    const duration = Date.now() - start;
-    this.logger.debug(`Ingested vote in ${duration}ms`);
-
-    return { status: "accepted", queued_at: new Date().toISOString() };
+  @HttpCode(HttpStatus.ACCEPTED) // 202 Accepted
+  async vote(@Body() voteDto: VoteDto) {
+    return this.votesService.ingestVote(voteDto);
   }
+}
+```
+
+**File:** `api/src/votes/votes.service.ts`
+
+```typescript
+async ingestVote(voteDto: VoteDto) {
+  await this.rabbitmq.publish("votes.exchange", "vote.cast", {
+    ...voteDto,
+    zone: this.zone,
+    timestamp: new Date().toISOString(),
+  });
+
+  this.metrics.voteCounter.inc({ choice: voteDto.choice, zone: this.zone });
+
+  return { status: "accepted", queued_at: new Date().toISOString() };
+}
+```
+
+**File:** `api/src/votes/dto/vote.dto.ts`
+
+```typescript
+export class VoteDto {
+  @IsIn(["tabs", "spaces"])
+  choice: "tabs" | "spaces";
+
+  @IsUUID("4")
+  user_id: string;
 }
 ```
 
@@ -330,209 +339,141 @@ export class VotesController {
 | -------------------- | ----------------------------------------------- |
 | **Stateless**        | No local state between requests                 |
 | **Fast**             | Under 10 ms by avoiding database I/O            |
-| **Idempotent-ready** | `user_id` on each vote for future deduplication |
+| **Validated**        | Global `ValidationPipe` with `class-validator`  |
+| **Route**            | `POST /votes` (no global `/api` prefix)         |
+| **Idempotent-ready** | `user_id` on each vote; `ON CONFLICT DO NOTHING` in worker |
 
 **Environment variables:**
 
 ```bash
-RABBITMQ_URL=amqp://192.168.1.5:5672
-ZONE=lxc2          # or macbook
+RABBITMQ_URL=amqp://admin:secret@rabbitmq:5672
+ZONE=local          # included on each message + Prometheus label
 PORT=3000
 ```
 
 ---
 
-### 7.2 Worker Service (Consumer Layer)
+### 7.2 Worker Service (Consumer Layer) — **implemented**
 
-**File:** `worker/src/consumer.ts`
+Uses `amqp-connection-manager` (auto-reconnect), `VoteConsumer` class, and `tsx watch` for dev. No Redis yet — totals go through PostgreSQL's `vote_totals` materialized view.
+
+**File:** `worker/src/consumer.ts` (excerpt)
 
 ```typescript
-import amqp from "amqplib";
-import { Pool } from "pg";
-import Redis from "ioredis";
+export class VoteConsumer {
+  private batch: VoteRecord[] = [];
 
-const BATCH_SIZE = 100;
-const BATCH_TIMEOUT = 1000; // 1 second
+  async start(): Promise<void> {
+    this.connection = amqp.connect([config.rabbitmq.url], {
+      heartbeatIntervalInSeconds: 5,
+      reconnectTimeInSeconds: 3,
+    });
 
-class VoteWorker {
-  private voteBatch: Vote[] = [];
-  private batchTimer: NodeJS.Timeout | null = null;
-
-  constructor(
-    private channel: amqp.Channel,
-    private db: Pool,
-    private redis: Redis,
-  ) {}
-
-  async start() {
-    await this.channel.assertQueue("votes.queue", { durable: true });
-    this.channel.prefetch(BATCH_SIZE);
-
-    this.channel.consume("votes.queue", async (msg) => {
-      if (!msg) return;
-
-      const vote = JSON.parse(msg.content.toString());
-      this.voteBatch.push(vote);
-      this.channel.ack(msg);
-
-      if (this.voteBatch.length >= BATCH_SIZE) {
-        await this.flushBatch();
-      } else {
-        this.resetBatchTimer();
-      }
+    this.channelWrapper = this.connection.createChannel({
+      setup: async (channel) => {
+        await channel.assertExchange(exchange, "topic", { durable: true });
+        await channel.assertQueue(queue, { durable: true });
+        await channel.bindQueue(queue, exchange, routingKey);
+        await channel.prefetch(prefetch);
+        await channel.consume(queue, (msg) => this.handleMessage(msg, channel));
+      },
     });
   }
 
-  private resetBatchTimer() {
-    if (this.batchTimer) clearTimeout(this.batchTimer);
-    this.batchTimer = setTimeout(() => this.flushBatch(), BATCH_TIMEOUT);
-  }
+  private handleMessage(msg: ConsumeMessage | null, channel: Channel): void {
+    const vote = JSON.parse(msg.content.toString()) as VoteRecord;
+    this.batch.push(vote);
+    channel.ack(msg); // early ACK — see trade-off below
 
-  private async flushBatch() {
-    if (this.voteBatch.length === 0) return;
-
-    const batch = [...this.voteBatch];
-    this.voteBatch = [];
-
-    const values = batch
-      .map((_, i) => `($${i * 3 + 1}, $${i * 3 + 2}, $${i * 3 + 3})`)
-      .join(",");
-
-    const params = batch.flatMap((v) => [v.choice, v.user_id, v.timestamp]);
-
-    await this.db.query(
-      `INSERT INTO votes (choice, user_id, created_at) VALUES ${values}`,
-      params,
-    );
-
-    const tabsCount = batch.filter((v) => v.choice === "tabs").length;
-    const spacesCount = batch.filter((v) => v.choice === "spaces").length;
-
-    await Promise.all([
-      this.redis.incrby("votes:tabs", tabsCount),
-      this.redis.incrby("votes:spaces", spacesCount),
-    ]);
-
-    console.log(`Flushed ${batch.length} votes to database`);
+    if (this.batch.length >= config.worker.batchSize) {
+      this.flush("batch-full");
+    } else {
+      this.resetTimer();
+    }
   }
 }
+```
+
+**File:** `worker/src/database.ts` (batch insert excerpt)
+
+```typescript
+const query = `
+  INSERT INTO votes (choice, user_id, zone, worker_id, created_at)
+  VALUES ${placeholders.join(", ")}
+  ON CONFLICT DO NOTHING
+`;
+await pool.query(query, values);
 ```
 
 | Detail         | Behavior                                                                 |
 | -------------- | ------------------------------------------------------------------------ |
-| **Batching**   | Up to 100 votes per flush                                                |
-| **Timeout**    | Flush partial batch after 1 s                                            |
+| **Batching**   | Up to 100 votes per flush (`BATCH_SIZE`)                                 |
+| **Timeout**    | Flush partial batch after 1 s (`BATCH_TIMEOUT_MS`)                       |
 | **ACK timing** | ACK after in-memory batch (not after DB) — higher throughput, crash risk |
-| **Redis**      | Counters updated with DB flush                                           |
+| **Totals**     | `REFRESH MATERIALIZED VIEW CONCURRENTLY vote_totals` every 10 flushes    |
+| **Partitions** | `ensurePartitionExists()` at startup + hourly for tomorrow               |
+| **Dev runner** | `tsx watch src/main.ts` (replaces ts-node-dev)                           |
 
-**Trade-off:** Early ACK can lose messages if the worker crashes between ACK and DB write. Acceptable for voting; use late ACK + idempotency for financial workloads.
+**Trade-off:** Early ACK can lose messages if the worker crashes between ACK and DB write. Acceptable for voting; use late ACK + idempotency for financial workloads (industry standard per competing-consumer patterns).
+
+**Planned enhancement:** Redis `INCRBY` counters on flush for sub-second frontend reads (see §7.3).
 
 ---
 
-### 7.3 Frontend (Visualization Layer)
+### 7.3 Frontend (Visualization Layer) — **planned**
 
-**Vote UI:** `frontend/src/app/page.tsx`
+**Current state:** `frontend/` is a Next.js 16 scaffold (`create-next-app` boilerplate on port 4000). Not yet in `docker-compose.yml`.
+
+**Target design** (unchanged intent — Redis-backed SSE for live totals):
+
+**Vote UI:** `frontend/src/app/page.tsx` *(planned)*
 
 ```typescript
 'use client';
 
-import { useEffect, useState } from 'react';
-
 export default function VotingPage() {
   const [votes, setVotes] = useState({ tabs: 0, spaces: 0 });
-  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     const eventSource = new EventSource('/api/stream');
-
-    eventSource.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      setVotes(data);
-    };
-
+    eventSource.onmessage = (event) => setVotes(JSON.parse(event.data));
     return () => eventSource.close();
   }, []);
 
   const handleVote = async (choice: 'tabs' | 'spaces') => {
-    setLoading(true);
-
-    await fetch('/api/vote', {
+    await fetch('http://localhost:3000/votes', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        choice,
-        user_id: crypto.randomUUID(),
-      }),
+      body: JSON.stringify({ choice, user_id: crypto.randomUUID() }),
     });
-
-    setLoading(false);
   };
 
-  const total = votes.tabs + votes.spaces;
-  const tabsPercent = total ? (votes.tabs / total) * 100 : 50;
-
-  return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-slate-900 to-slate-800">
-      {/* Progress bar + Tabs / Spaces buttons */}
-    </div>
-  );
+  // Progress bar + Tabs / Spaces buttons
 }
 ```
 
-**SSE stream:** `frontend/src/app/api/stream/route.ts`
+**SSE stream:** `frontend/src/app/api/stream/route.ts` *(planned — reads Redis)*
 
 ```typescript
-import Redis from "ioredis";
-
 export async function GET() {
   const redis = new Redis(process.env.REDIS_URL);
-
-  const stream = new ReadableStream({
-    async start(controller) {
-      const sendUpdate = async () => {
-        const [tabs, spaces] = await Promise.all([
-          redis.get("votes:tabs"),
-          redis.get("votes:spaces"),
-        ]);
-
-        controller.enqueue(
-          `data: ${JSON.stringify({
-            tabs: parseInt(tabs || "0"),
-            spaces: parseInt(spaces || "0"),
-          })}\n\n`,
-        );
-      };
-
-      await sendUpdate();
-      const interval = setInterval(sendUpdate, 500);
-
-      return () => clearInterval(interval);
-    },
-  });
-
-  return new Response(stream, {
-    headers: {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      Connection: "keep-alive",
-    },
-  });
+  // Poll votes:tabs / votes:spaces every 500 ms → text/event-stream
 }
 ```
 
-**Real-time strategy:** SSE polls Redis every 500 ms—sub-second latency without WebSocket complexity.
+**Interim read path (implemented today):** query `vote_totals` materialized view in PostgreSQL until Redis + SSE land.
+
+**Real-time strategy (target):** SSE polls Redis every 500 ms — sub-second latency without WebSocket complexity. Aspirational standard: expose queue depth and consumer lag in Prometheus alongside UI latency (see §12).
 
 ---
 
 ## 8. Networking Strategy
 
-### 8.1 Docker Networking (Local)
+### 8.1 Docker Networking (Local) — **implemented**
 
-**File:** `docker-compose.yml`
+**File:** `docker-compose.yml` (excerpt — matches repo)
 
 ```yaml
-version: "3.9"
-
 services:
   postgres:
     image: postgres:16-alpine
@@ -540,58 +481,65 @@ services:
       POSTGRES_DB: votes
       POSTGRES_USER: voteuser
       POSTGRES_PASSWORD: votepass
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/sql:/docker-entrypoint-initdb.d
     networks:
-      - control-plane
-    ports:
-      - "5432:5432"
+      - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U voteuser -d votes"]
 
   rabbitmq:
     image: rabbitmq:3.13-management-alpine
     environment:
       RABBITMQ_DEFAULT_USER: admin
       RABBITMQ_DEFAULT_PASS: secret
-    networks:
-      - control-plane
     ports:
       - "5672:5672"
       - "15672:15672"
-
-  redis:
-    image: redis:7.2-alpine
     networks:
-      - control-plane
-    ports:
-      - "6379:6379"
+      - app-network
 
   api:
-    build: ./api
+    build:
+      context: ./api
+      dockerfile: Dockerfile.dev
     environment:
       RABBITMQ_URL: amqp://admin:secret@rabbitmq:5672
       ZONE: local
-    networks:
-      - control-plane
+      PORT: 3000
+    volumes:
+      - ./api/src:/app/src
     ports:
       - "3000:3000"
     depends_on:
-      - rabbitmq
+      rabbitmq:
+        condition: service_healthy
 
   worker:
-    build: ./worker
+    build:
+      context: ./worker
+      dockerfile: Dockerfile.dev
     environment:
       RABBITMQ_URL: amqp://admin:secret@rabbitmq:5672
       DATABASE_URL: postgresql://voteuser:votepass@postgres:5432/votes
-      REDIS_URL: redis://redis:6379
-    networks:
-      - control-plane
+      WORKER_ID: worker-local
+      BATCH_SIZE: "100"
+      BATCH_TIMEOUT_MS: "1000"
+    volumes:
+      - ./worker/src:/app/src
     depends_on:
-      - rabbitmq
-      - postgres
-      - redis
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
 
 networks:
-  control-plane:
+  app-network:
     driver: bridge
 ```
+
+> **Note:** Redis is not in local compose yet (`REDIS_URL` reserved for future). Production Proxmox layout below is unchanged in intent.
 
 **Production:** Services run on separate machines—no shared Docker networks. LXC1 exposes stateful ports; compute nodes use host IPs.
 
@@ -645,7 +593,7 @@ http {
             add_header Content-Type text/plain;
         }
 
-        location /api/ {
+        location /votes {
             proxy_pass http://api_backend;
             proxy_next_upstream error timeout http_502 http_503 http_504;
 
@@ -658,6 +606,10 @@ http {
             proxy_send_timeout    5s;
             proxy_read_timeout    5s;
         }
+
+        # Legacy alias — optional rewrite if clients still POST /api/vote
+        location = /api/vote {
+            proxy_pass http://api_backend/votes;
 
         location / {
             proxy_pass http://192.168.1.20:3001;
@@ -679,36 +631,37 @@ http {
 
 ---
 
-### 8.3 Health Check Endpoints
+### 8.3 Health Check Endpoints — **implemented**
 
 **File:** `api/src/health/health.controller.ts`
 
 ```typescript
-import { Controller, Get, ServiceUnavailableException } from "@nestjs/common";
-import { RabbitMQService } from "../rabbitmq/rabbitmq.service";
-
 @Controller("health")
 export class HealthController {
-  constructor(private readonly rabbitmq: RabbitMQService) {}
+  constructor(
+    private readonly rabbitmq: RabbitmqService,
+    private readonly config: ConfigService,
+  ) {}
 
   @Get()
   async check() {
-    const queueHealthy = await this.rabbitmq.isConnected();
+    const isRabbitMqHealthy = await this.rabbitmq.isConnected();
 
-    if (!queueHealthy) {
-      throw new ServiceUnavailableException("RabbitMQ unavailable");
+    if (!isRabbitMqHealthy) {
+      throw new ServiceUnavailableException("RabbitMQ is not available");
     }
 
     return {
       status: "ok",
-      zone: process.env.ZONE,
+      zone: this.config.get("ZONE"),
       timestamp: new Date().toISOString(),
+      dependencies: { rabbitmq: isRabbitMqHealthy },
     };
   }
 }
 ```
 
-If RabbitMQ is down, the API reports unhealthy so Nginx can stop routing traffic to that instance.
+If RabbitMQ is down, the API reports unhealthy so Nginx can stop routing traffic to that instance (once Nginx is deployed).
 
 ---
 
@@ -716,36 +669,39 @@ If RabbitMQ is down, the API reports unhealthy so Nginx can stop routing traffic
 
 ### Request Lifecycle
 
+**Implemented today** (solid lines) vs **planned** (dashed):
+
 ```mermaid
 sequenceDiagram
     autonumber
     actor User
-    participant Nginx
     participant API
     participant RabbitMQ
     participant Worker
     participant PostgreSQL
-    participant Redis
-    participant SSE as Frontend SSE
 
-    User->>Nginx: POST /api/vote
-    Nginx->>API: Round-robin route
-    API->>API: Validate payload
-    API->>RabbitMQ: Publish vote.cast
-    API-->>User: 202 Accepted (under 10ms)
+    User->>API: POST /votes
+    API->>API: Validate VoteDto
+    API->>RabbitMQ: Publish vote.cast (+ zone, timestamp)
+    API-->>User: 202 Accepted
 
-    RabbitMQ->>Worker: Deliver message
+    RabbitMQ->>Worker: Deliver message (prefetch ≤ 100)
     Worker->>Worker: Add to batch · ACK
     Note over Worker: Flush at 100 votes or 1 s
-    Worker->>PostgreSQL: Batch INSERT
-    Worker->>Redis: INCRBY counters
+    Worker->>PostgreSQL: Batch INSERT into votes
+    Note over Worker,PostgreSQL: Every 10 flushes
+    Worker->>PostgreSQL: REFRESH vote_totals
 
-    loop Every 500 ms
-        SSE->>Redis: GET votes:tabs / votes:spaces
-        Redis-->>SSE: Counts
+    participant Redis as Redis (planned)
+    participant SSE as Frontend SSE (planned)
+    Worker-.->Redis: INCRBY counters (planned)
+    loop Every 500 ms (planned)
+        SSE-.->Redis: GET votes:tabs / votes:spaces
         SSE-->>User: SSE event
     end
 ```
+
+> **Nginx routing** is planned for Proxmox — local dev hits `POST http://localhost:3000/votes` directly. Planned Nginx exposes `/votes` and optional legacy alias `/api/vote`.
 
 ### Message Acknowledgment Strategies
 
@@ -771,22 +727,26 @@ flowchart LR
 
 **Interview insight:** For voting, prioritize throughput. For payments, use late ACK with idempotency keys.
 
-### RabbitMQ Exchange & Queue Setup
+### RabbitMQ Exchange & Queue Setup — **implemented**
 
-**File:** `api/src/rabbitmq/rabbitmq.module.ts`
+**File:** `api/src/rabbitmq/rabbitmq.service.ts` (uses `amqp-connection-manager` for auto-reconnect)
 
 ```typescript
-async onModuleInit() {
-  const connection = await amqp.connect(process.env.RABBITMQ_URL);
-  const channel = await connection.createChannel();
+this.channelWrapper = this.connection.createChannel({
+  setup: async (channel: Channel) => {
+    await channel.assertExchange("votes.exchange", "topic", { durable: true });
+    await channel.assertQueue("votes.queue", { durable: true });
+    await channel.bindQueue("votes.queue", "votes.exchange", "vote.cast");
+  },
+});
 
-  await channel.assertExchange('votes.exchange', 'topic', { durable: true });
-  await channel.assertQueue('votes.queue', { durable: true });
-  await channel.bindQueue('votes.queue', 'votes.exchange', 'vote.cast');
-
-  this.channel = channel;
-}
+await this.channelWrapper?.publish(exchange, routingKey, message, {
+  persistent: true,
+  timestamp: Date.now(),
+});
 ```
+
+The worker mirrors the same topology in `VoteConsumer.start()` so either service can boot independently.
 
 **Topic routing keys (future):**
 
@@ -800,52 +760,51 @@ async onModuleInit() {
 
 ## 10. Database Design & Partitioning
 
-### Schema
+### Schema — **implemented**
 
 **File:** `infra/sql/001_schema.sql`
 
 ```sql
-CREATE EXTENSION IF NOT EXISTS pg_partman;
-
-CREATE TABLE votes (
-    id         BIGSERIAL,
-    choice     TEXT NOT NULL CHECK (choice IN ('tabs', 'spaces')),
-    user_id    UUID NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+CREATE TABLE IF NOT EXISTS votes (
+    id              BIGSERIAL,
+    choice          TEXT NOT NULL CHECK (choice IN ('tabs', 'spaces')),
+    user_id         UUID NOT NULL,
+    zone            TEXT NOT NULL DEFAULT 'unknown',
+    worker_id       TEXT NOT NULL DEFAULT 'unknown',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (id, created_at)
 ) PARTITION BY RANGE (created_at);
 
-CREATE INDEX idx_votes_created_at ON votes (created_at DESC);
-CREATE INDEX idx_votes_choice       ON votes (choice);
-CREATE INDEX idx_votes_user_id      ON votes (user_id);
+CREATE INDEX IF NOT EXISTS idx_votes_created_at ON votes (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_votes_choice ON votes (choice);
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS vote_totals AS
+    SELECT choice, COUNT(*) AS total
+    FROM votes
+    GROUP BY choice;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_vote_totals_choice ON vote_totals (choice);
 ```
 
-### Partitions
+Uses **PostgreSQL 16 native declarative partitioning** (no `pg_partman` extension). Partition key includes `created_at` in the primary key as required by PostgreSQL range partitioning.
 
-**File:** `infra/sql/002_partitions.sql`
+### Partitions — **implemented**
 
-```sql
-CREATE TABLE votes_2024_05_25 PARTITION OF votes
-    FOR VALUES FROM ('2024-05-25 00:00:00') TO ('2024-05-26 00:00:00');
+**Seed on first boot:** `infra/sql/002_partitions.sql` creates today + tomorrow via `CURRENT_DATE`.
 
-CREATE TABLE votes_2024_05_26 PARTITION OF votes
-    FOR VALUES FROM ('2024-05-26 00:00:00') TO ('2024-05-27 00:00:00');
+**Ongoing:** `worker/src/database.ts` → `ensurePartitionExists()` at startup (today + tomorrow) and hourly thereafter. UTC day boundaries; idempotent (`SELECT` from `pg_tables` before `CREATE TABLE … PARTITION OF`).
+
+```typescript
+// worker/src/database.ts (excerpt)
+if (exists.rowCount === 0) {
+  await client.query(
+    `CREATE TABLE ${quoteIdent(tableName)} PARTITION OF votes
+     FOR VALUES FROM (${quoteLiteral(startStr)}) TO (${quoteLiteral(endStr)})`,
+  );
+}
 ```
 
-**Daily cron:** `infra/scripts/create-partition.sh`
-
-```bash
-#!/bin/bash
-# 0 0 * * * /path/to/create-partition.sh
-
-TOMORROW=$(date -d "+1 day" +%Y-%m-%d)
-NEXT_DAY=$(date -d "+2 days" +%Y-%m-%d)
-
-psql -U voteuser -d votes <<EOF
-CREATE TABLE IF NOT EXISTS votes_${TOMORROW//-/_} PARTITION OF votes
-FOR VALUES FROM ('$TOMORROW 00:00:00') TO ('$NEXT_DAY 00:00:00');
-EOF
-```
+> **Planned:** `infra/scripts/create-partition.sh` cron on LXC1 as a belt-and-suspenders backup — worker automation covers dev today.
 
 ### Query Patterns
 
@@ -878,26 +837,20 @@ WHERE user_id = '...'
 GROUP BY choice;
 ```
 
-### Connection Pooling
+### Connection Pooling — **implemented**
 
 **File:** `worker/src/database.ts`
 
 ```typescript
-import { Pool } from "pg";
-
-export const pool = new Pool({
-  host: "192.168.1.5",
-  port: 5432,
-  database: "votes",
-  user: "voteuser",
-  password: "votepass",
-  max: 20,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000,
+pool = new Pool({
+  connectionString: config.postgres.connectionString,
+  max: config.postgres.poolMax,           // default 10
+  idleTimeoutMillis: config.postgres.idleTimeoutMs,
+  connectionTimeoutMillis: config.postgres.connectionTimeoutMs,
 });
-
-pool.query("SELECT 1"); // warmup
 ```
+
+Configured via `DATABASE_URL` in `worker/.env.example`. Aspirational production tuning: keep pool size modest (~10–20 connections per worker) to avoid connection overhead at high batch throughput.
 
 ---
 
@@ -941,28 +894,32 @@ upstream api_backend {
 
 ## 12. Observability & Telemetry
 
-### API Metrics
+> **Status:** API exposes `GET /metrics` with `votes_ingested_total` counter. Full Prometheus/Grafana/Loki stack and worker histograms are **planned** (configs referenced below target Proxmox Phase 4).
+
+### API Metrics — **implemented**
 
 **File:** `api/src/metrics/metrics.service.ts`
 
 ```typescript
-import { Counter, Histogram, register } from "prom-client";
-
-export const voteCounter = new Counter({
+this.voteCounter = new Counter({
   name: "votes_ingested_total",
   help: "Total votes ingested",
   labelNames: ["choice", "zone"],
 });
 
-export const responseTime = new Histogram({
+this.httpDuration = new Histogram({
   name: "http_request_duration_ms",
-  help: "HTTP request latency",
-  labelNames: ["method", "route", "status"],
+  help: "Duration of HTTP requests in milliseconds",
+  labelNames: ["method", "route", "status_code"],
   buckets: [1, 5, 10, 50, 100, 500, 1000],
 });
 ```
 
-### Worker Metrics
+Scrape locally: `curl http://localhost:3000/metrics`
+
+> **Note:** `httpDuration` is defined but not yet wired to an interceptor — planned enhancement.
+
+### Worker Metrics — **planned**
 
 ```typescript
 export const batchSize = new Histogram({
@@ -976,7 +933,7 @@ export const dbWriteDuration = new Histogram({
 });
 ```
 
-### Prometheus
+### Prometheus — **planned**
 
 **File:** `infra/prometheus/prometheus.yml`
 
@@ -1016,7 +973,7 @@ docker run -d --name prometheus -p 9091:9090 \
 
 UI: `http://192.168.1.5:9091`
 
-### Grafana
+### Grafana — **planned**
 
 Pre-built dashboard: `infra/grafana/dashboards/system-overview.json`
 
@@ -1036,7 +993,7 @@ docker run -d --name grafana -p 3003:3000 \
 
 UI: `http://192.168.1.5:3003` (default `admin` / `admin`)
 
-### Log Aggregation (Loki)
+### Log Aggregation (Loki) — **planned**
 
 ```yaml
 services:
@@ -1061,6 +1018,8 @@ services:
 ---
 
 ## 13. Chaos Engineering Tests
+
+> **Status:** Test procedures and expected behaviors are documented below for Proxmox deployment. Script `infra/k6/vote-storm.js` and multi-zone hosts are **planned** — run adapted commands against local Docker (`localhost:3000/votes`) until Phase 2.
 
 ### Test Suite Overview
 
@@ -1099,7 +1058,7 @@ Recovery: under 10 s (`max_fails=2` × `fail_timeout=5s`)
 
 ```bash
 for i in {1..10000}; do
-  curl -s -X POST http://192.168.1.5/api/vote \
+  curl -s -X POST http://192.168.1.5/votes \
     -H 'Content-Type: application/json' \
     -d "{\"choice\":\"tabs\",\"user_id\":\"test-$i\"}"
 done
@@ -1157,9 +1116,9 @@ sleep 30
 
 ---
 
-### Test 5: Load Test (`vote-storm.js`)
+### Test 5: Load Test (`vote-storm.js`) — **planned**
 
-**File:** `infra/k6/vote-storm.js`
+**File:** `infra/k6/vote-storm.js` *(not in repo yet — template below)*
 
 ```javascript
 import http from "k6/http";
@@ -1179,7 +1138,7 @@ export const options = {
   },
 };
 
-const BASE_URL = "http://192.168.1.5";
+const BASE_URL = "http://192.168.1.5"; // via Nginx in prod; use http://localhost:3000 locally
 
 export default function () {
   const payload = JSON.stringify({
@@ -1187,14 +1146,14 @@ export default function () {
     user_id: `k6-${__VU}-${__ITER}`,
   });
 
-  const res = http.post(`${BASE_URL}/api/vote`, payload, {
+  const res = http.post(`${BASE_URL}/votes`, payload, {
     headers: { "Content-Type": "application/json" },
   });
 
   check(res, {
     "status 202": (r) => r.status === 202,
     "response time OK": (r) => r.timings.duration < 200,
-    "has zone header": (r) => r.headers["X-Zone-Hit"] !== undefined,
+    // "has zone header": (r) => r.headers["X-Zone-Hit"] !== undefined,  // Nginx only
   });
 
   sleep(1);
@@ -1208,6 +1167,8 @@ k6 run infra/k6/vote-storm.js
 ---
 
 ## 14. Implementation Roadmap
+
+> **Progress:** Phase 1 core pipeline is **implemented** (API, worker, Postgres, local Compose). Phases 2–5 remain as originally planned.
 
 ```mermaid
 gantt
@@ -1225,20 +1186,18 @@ gantt
     Chaos testing + docs         :p5, after p4, 7d
 ```
 
-### Phase 1: Local Development (Week 1)
+### Phase 1: Local Development (Week 1) — **core complete**
 
 **Goal:** Full pipeline on laptop via Docker Compose.
 
 ```bash
-mkdir -p tabs-vs-spaces/{frontend,api,worker,infra/{nginx,sql,k6,prometheus,grafana}}
-cd tabs-vs-spaces && git init
 docker compose up -d
-curl -X POST http://localhost:3000/api/vote \
+curl -X POST http://localhost:3000/votes \
   -H 'Content-Type: application/json' \
-  -d '{"choice":"tabs","user_id":"test"}'
+  -d '{"choice":"tabs","user_id":"550e8400-e29b-41d4-a716-446655440000"}'
 ```
 
-**Milestone:** Votes flow API → queue → worker → Postgres; counts visible in Redis/UI.
+**Milestone:** Votes flow API → queue → worker → Postgres. Verify with `\d+ votes` and `SELECT * FROM vote_totals;`. Redis UI and SSE come in a later phase.
 
 ---
 
@@ -1324,7 +1283,7 @@ psql -U voteuser -d votes -c "SELECT * FROM votes WHERE user_id='test';"
 ```bash
 curl http://192.168.1.10:3000/metrics | grep http_request_duration
 ping 192.168.1.5
-curl -w "@curl-format.txt" -X POST http://192.168.1.5/api/vote \
+curl -w "@curl-format.txt" -X POST http://192.168.1.5/votes \
   -H 'Content-Type: application/json' \
   -d '{"choice":"tabs","user_id":"test"}'
 ```
@@ -1346,9 +1305,15 @@ ssh lxc1 "nginx -T | grep -A5 upstream"
 **Symptom:** `no partition of relation "votes" found for row`
 
 ```bash
-date
-psql -U voteuser -d votes -c "\d+ votes"
-/root/tabs-vs-spaces/infra/scripts/create-partition.sh
+docker compose exec postgres psql -U voteuser -d votes -c "\d+ votes"
+docker compose restart worker   # re-runs ensurePartitionExists for today + tomorrow
+```
+
+If a malformed partition exists from an earlier run, drop it and restart the worker:
+
+```bash
+docker compose exec postgres psql -U voteuser -d votes -c "DROP TABLE IF EXISTS votes_YYYY_MM_DD;"
+docker compose restart worker
 ```
 
 ---
@@ -1396,9 +1361,12 @@ git clone https://github.com/yourusername/tabs-vs-spaces.git
 cd tabs-vs-spaces
 docker compose up -d
 
-curl -X POST http://localhost:3000/api/vote \
+curl -X POST http://localhost:3000/votes \
   -H 'Content-Type: application/json' \
-  -d '{"choice":"tabs","user_id":"test"}'
+  -d '{"choice":"tabs","user_id":"550e8400-e29b-41d4-a716-446655440000"}'
+
+# Verify persistence
+docker compose exec postgres psql -U voteuser -d votes -c "SELECT * FROM vote_totals;"
 
 # Proxmox
 ssh root@192.168.1.5 "cd tabs-vs-spaces && git pull && docker compose up -d"
@@ -1416,13 +1384,19 @@ open http://192.168.1.5:15672  # RabbitMQ Management
 
 ### Appendix B: Environment Variables
 
-| Variable       | Service          | Example                                                 | Purpose                |
-| -------------- | ---------------- | ------------------------------------------------------- | ---------------------- |
-| `RABBITMQ_URL` | API, Worker      | `amqp://admin:secret@192.168.1.5:5672`                  | Broker connection      |
-| `DATABASE_URL` | Worker           | `postgresql://voteuser:votepass@192.168.1.5:5432/votes` | Postgres               |
-| `REDIS_URL`    | Worker, Frontend | `redis://192.168.1.5:6379`                              | Counters / SSE         |
-| `ZONE`         | API              | `lxc2` or `macbook`                                     | Zone label for metrics |
-| `PORT`         | API              | `3000`                                                  | HTTP listen port       |
+| Variable             | Service     | Example                                                 | Purpose                          | Status      |
+| -------------------- | ----------- | ------------------------------------------------------- | -------------------------------- | ----------- |
+| `RABBITMQ_URL`       | API, Worker | `amqp://admin:secret@rabbitmq:5672`                     | Broker connection                | Implemented |
+| `DATABASE_URL`       | Worker      | `postgresql://voteuser:votepass@postgres:5432/votes`    | Postgres                         | Implemented |
+| `ZONE`               | API         | `local`, `lxc2`, or `macbook`                           | Zone label on message + metrics  | Implemented |
+| `WORKER_ID`          | Worker      | `worker-local`                                          | Stored on each vote row          | Implemented |
+| `BATCH_SIZE`         | Worker      | `100`                                                   | Votes per flush                  | Implemented |
+| `BATCH_TIMEOUT_MS`   | Worker      | `1000`                                                  | Partial batch timeout            | Implemented |
+| `RABBITMQ_PREFETCH`  | Worker      | `100`                                                   | Max unacked messages             | Implemented |
+| `PORT`               | API         | `3000`                                                  | HTTP listen port                 | Implemented |
+| `REDIS_URL`          | Worker, Frontend | `redis://192.168.1.5:6379`                         | Counters / SSE                   | Planned     |
+
+See `api/.env.example` and `worker/.env.example` for local defaults.
 
 ---
 
@@ -1430,6 +1404,10 @@ open http://192.168.1.5:15672  # RabbitMQ Management
 
 This project turns abstract system design into measurable engineering: load balancing with failover, async competing consumers, time-partitioned writes, chaos tests with recovery times, and dashboards backed by real metrics.
 
+**Today (Phase 1):** a vote travels API → RabbitMQ → worker → PostgreSQL, with `vote_totals` refreshed periodically.
+
+**Target (Phases 2–5):** add Redis → SSE for live UI, Nginx multi-zone routing, full observability stack, and Proxmox chaos testing — intent unchanged.
+
 The stack is intentionally heavier than a voting app needs—because the goal is to practice patterns that scale to ledgers, feeds, and event platforms.
 
-**Next step:** Phase 1 — `docker compose up -d` on your machine and confirm a vote travels API → RabbitMQ → worker → PostgreSQL → Redis → SSE.
+**Next step:** `docker compose up -d`, POST a vote to `/votes`, confirm rows in Postgres — then continue the roadmap in §14.

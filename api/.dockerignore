@@ -1,0 +1,8 @@
+node_modules
+dist
+.git
+
+# Local env overrides — containers receive config from docker-compose environment
+.env
+.env.local
+.env.*.local
