@@ -16,6 +16,8 @@ export class VoteConsumer {
   // ─── Stats ─────────────────────────────────────────────────────────────────
   private totalProcessed = 0;
   private flushCount = 0;
+  private totalsRefreshTimer: NodeJS.Timeout | null = null;
+  private static readonly TOTALS_REFRESH_DEBOUNCE_MS = 2_000;
 
   constructor() {}
 
@@ -149,16 +151,33 @@ export class VoteConsumer {
           `total=${this.totalProcessed} | flushes=${this.flushCount}`,
       );
 
-      // Refresh materialized view every 10 flushes (not every flush — it's expensive)
-      if (this.flushCount % 10 === 0) {
-        await refreshTotals().catch((err) =>
-          console.warn("[Consumer] View refresh failed:", err.message),
-        );
+      if (inserted > 0) {
+        this.scheduleTotalsRefresh();
       }
     } catch (err) {
       console.error("[Consumer] DB flush failed:", err);
       // In production: push to dead-letter queue or write to local file as fallback
     }
+  }
+
+  private scheduleTotalsRefresh(): void {
+    if (this.totalsRefreshTimer) clearTimeout(this.totalsRefreshTimer);
+    this.totalsRefreshTimer = setTimeout(() => {
+      this.totalsRefreshTimer = null;
+      refreshTotals().catch((err) =>
+        console.warn("[Consumer] View refresh failed:", err.message),
+      );
+    }, VoteConsumer.TOTALS_REFRESH_DEBOUNCE_MS);
+  }
+
+  private async flushTotalsRefresh(): Promise<void> {
+    if (this.totalsRefreshTimer) {
+      clearTimeout(this.totalsRefreshTimer);
+      this.totalsRefreshTimer = null;
+    }
+    await refreshTotals().catch((err) =>
+      console.warn("[Consumer] View refresh failed:", err.message),
+    );
   }
 
   // ─── Partition management ──────────────────────────────────────────────────
@@ -179,6 +198,8 @@ export class VoteConsumer {
     if (this.batch.length > 0) {
       await this.flushToDb(this.batch.splice(0), "shutdown");
     }
+
+    await this.flushTotalsRefresh();
 
     await this.channelWrapper.close();
     await this.connection.close();

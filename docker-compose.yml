@@ -1,11 +1,11 @@
 services:
-# ---Infra Services ------------------------------------------------
+  # ---Infra Services ------------------------------------------------
   rabbitmq:
     image: rabbitmq:3.13-management-alpine
     container_name: rabbitmq
     hostname: rabbitmq
     ports:
-      - "5672:5672"   # AMQP port
+      - "5672:5672" # AMQP port
       - "15672:15672" # Management UI
     environment:
       RABBITMQ_DEFAULT_USER: admin
@@ -31,7 +31,7 @@ services:
       POSTGRES_PASSWORD: votepass
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./infra/sql:/docker-entrypoint-initdb.d 
+      - ./infra/sql:/docker-entrypoint-initdb.d
     networks:
       - app-network
     healthcheck:
@@ -39,12 +39,27 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-      
+  redis:
+    image: redis:7.2-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - app-network
+    command: redis-server --appendonly yes # Persist data to disk
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   # ---Services ------------------------------------------------
   api:
     build:
       context: ./api
-      dockerfile: Dockerfile.dev   # We'll add this below
+      dockerfile: Dockerfile.dev # We'll add this below
     container_name: api
     ports:
       - "3000:3000"
@@ -53,7 +68,7 @@ services:
       PORT: 3000
       ZONE: local
     volumes:
-      - ./api/src:/app/src   # Hot reload in dev
+      - ./api/src:/app/src # Hot reload in dev
     networks:
       - app-network
     depends_on:
@@ -67,10 +82,10 @@ services:
     environment:
       RABBITMQ_URL: amqp://admin:secret@rabbitmq:5672
       DATABASE_URL: postgresql://voteuser:votepass@postgres:5432/votes
-      REDIS_URL: ""          # Empty for now, adding Redis later
       WORKER_ID: worker-local
       BATCH_SIZE: "100"
       BATCH_TIMEOUT_MS: "1000"
+      REDIS_URL: redis://redis:6379
     volumes:
       - ./worker/src:/app/src
     networks:
@@ -88,3 +103,4 @@ networks:
 volumes:
   rabbitmq_data:
   postgres_data:
+  redis_data:
