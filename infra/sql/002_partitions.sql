@@ -31,6 +31,6 @@ BEGIN
             'CREATE TABLE %I PARTITION OF votes FOR VALUES FROM (%L) TO (%L)',
             tbl_tomorrow, tomorrow, day_after
         );
-        RAISE NOTICE 'Created partition: %', tbl_tmrw;
+        RAISE NOTICE 'Created partition: %', tbl_tomorrow;
     END IF;
 END $$;

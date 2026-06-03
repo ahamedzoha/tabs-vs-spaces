@@ -71,6 +71,16 @@ services:
       - ./api/src:/app/src # Hot reload in dev
     networks:
       - app-network
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'node -e "fetch(''http://127.0.0.1:3000/health'').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -94,6 +104,25 @@ services:
       rabbitmq:
         condition: service_healthy
       postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    container_name: frontend
+    ports:
+      - "4000:4000"
+    environment:
+      API_URL: http://api:3000
+      REDIS_URL: redis://redis:6379
+    volumes:
+      - ./frontend/src:/app/src
+    networks:
+      - app-network
+    depends_on:
+      api:
         condition: service_healthy
       redis:
         condition: service_healthy

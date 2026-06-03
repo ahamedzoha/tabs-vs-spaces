@@ -59,6 +59,34 @@ export async function incrementCounters(
   await pipeline.exec();
 }
 
+// ─── Seed counters from Postgres on startup ──────────────────────────────────
+// Postgres is the source of truth. A fresh Redis (e.g. wiped volume, first
+// deploy) starts at 0 even though Postgres already has history. This seeds the
+// counters from the DB so the live UI is correct after a Redis reset.
+//
+// We use `SET ... NX` (set only if the key does NOT already exist), which makes
+// this safe to call from every worker at the same time:
+//   • If Redis already has counters (normal restart with AOF, or another worker
+//     already seeded / is incrementing), NX makes this a no-op — we never
+//     overwrite newer values with a possibly-stale count.
+//   • If the key is missing, the first worker to run wins and sets the base
+//     value; the others no-op.
+export async function seedCountersFromDb(
+  counts: Record<string, number>,
+): Promise<void> {
+  const redis = getRedis();
+  if (!redis) return;
+
+  const pipeline = redis.pipeline();
+  pipeline.set("votes:tabs", String(counts.tabs ?? 0), "NX");
+  pipeline.set("votes:spaces", String(counts.spaces ?? 0), "NX");
+  await pipeline.exec();
+
+  console.log(
+    `[Redis] Seeded counters (only if missing) — tabs=${counts.tabs ?? 0}, spaces=${counts.spaces ?? 0}`,
+  );
+}
+
 export async function closeRedis(): Promise<void> {
   if (client) {
     await client.quit();

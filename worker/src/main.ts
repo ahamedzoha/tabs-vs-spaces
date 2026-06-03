@@ -1,6 +1,6 @@
 import { VoteConsumer } from "./consumer";
-import { ensurePartitionExists, getPool } from "./database";
-import { closeRedis, connectRedis } from "./redis";
+import { ensurePartitionExists, getCountsByChoice, getPool } from "./database";
+import { closeRedis, connectRedis, seedCountersFromDb } from "./redis";
 
 async function bootstrap() {
   console.log("[Main] Tabs vs Spaces — Vote Worker");
@@ -39,6 +39,11 @@ async function bootstrap() {
   // ─── Redis (optional — counters for live frontend reads) ───────────────────
   try {
     await connectRedis();
+
+    // Seed live counters from Postgres so a fresh/wiped Redis doesn't show 0
+    // while the DB still has history. Safe to run on every worker (uses SET NX).
+    const counts = await getCountsByChoice();
+    await seedCountersFromDb(counts);
   } catch (err) {
     console.warn(
       "[Main] Redis unavailable — worker continues without live counters:",

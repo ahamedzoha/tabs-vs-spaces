@@ -129,9 +129,15 @@ export class VoteConsumer {
     this.flushToDb(toFlush, reason).finally(() => {
       this.isFlushing = false;
 
-      // If new messages arrived while we were flushing, check if we should flush again
+      // If new messages arrived while we were flushing, decide what to do next:
       if (this.batch.length >= config.worker.batchSize) {
+        // Enough for a full batch — flush immediately.
         this.flush("batch-full");
+      } else if (this.batch.length > 0 && !this.batchTimer) {
+        // A partial batch is waiting but no timer is armed (e.g. messages were
+        // put back here, or a timeout fired mid-flush). Arm one so these votes
+        // can't get stuck until the next message happens to arrive.
+        this.resetTimer();
       }
     });
   }

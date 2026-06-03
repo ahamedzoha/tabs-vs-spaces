@@ -39,16 +39,12 @@ export async function ensurePartitionExists(date: Date): Promise<void> {
     const end = new Date(Date.UTC(y, m, d + 1));
     const endStr = `${end.getUTCFullYear()}-${pad2(end.getUTCMonth() + 1)}-${pad2(end.getUTCDate())}`;
 
-    const exists = await client.query<{ exists: number }>(
-      `SELECT 1 AS exists FROM pg_tables WHERE schemaname = 'public' AND tablename = $1`,
-      [tableName],
+    // CREATE TABLE IF NOT EXISTS is idempotent AND race-safe: if two workers
+    // run this at the same time, the second one is a harmless no-op instead of
+    // crashing with "relation already exists".
+    await client.query(
+      `CREATE TABLE IF NOT EXISTS ${quoteIdent(tableName)} PARTITION OF votes FOR VALUES FROM (${quoteLiteral(startStr)}) TO (${quoteLiteral(endStr)})`,
     );
-
-    if (exists.rowCount === 0) {
-      await client.query(
-        `CREATE TABLE ${quoteIdent(tableName)} PARTITION OF votes FOR VALUES FROM (${quoteLiteral(startStr)}) TO (${quoteLiteral(endStr)})`,
-      );
-    }
 
     console.log(`[DB] partition ensured: ${tableName}`);
   } catch (error) {
@@ -104,6 +100,21 @@ export async function batchInsertVotes(
 // ─── Refresh materialized view for frontend reads ────────────────────────────
 export async function refreshTotals(): Promise<void> {
   await getPool().query("REFRESH MATERIALIZED VIEW CONCURRENTLY vote_totals");
+}
+
+// ─── Authoritative vote counts (used to seed Redis on startup) ────────────────
+// Counts straight from the `votes` table so the numbers are always current,
+// even if the debounced `vote_totals` materialized view is briefly stale.
+export async function getCountsByChoice(): Promise<Record<string, number>> {
+  const result = await getPool().query<{ choice: string; total: string }>(
+    "SELECT choice, COUNT(*)::bigint AS total FROM votes GROUP BY choice",
+  );
+
+  const counts: Record<string, number> = {};
+  for (const row of result.rows) {
+    counts[row.choice] = Number(row.total);
+  }
+  return counts;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

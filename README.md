@@ -3,14 +3,13 @@
 **Project codename:** `tabs-vs-spaces`  
 **Purpose:** A hands-on laboratory for distributed systems, load balancing, asynchronous processing, and chaos engineering—without the overhead of complex business logic.
 
-> **Document version:** 1.2 · **Last updated:** June 1, 2026 · **Maintained by:** Azaz Ahamed Zoha
+> **Document version:** 1.3 · **Last updated:** June 3, 2026 · **Maintained by:** Azaz Ahamed Zoha
 
 > **Implementation status (June 2026)**
 >
 > | Status | Components |
 > | ------ | ---------- |
-> | **Implemented** | NestJS API (`POST /votes`), RabbitMQ ingest, worker batch consumer, PostgreSQL partitioned writes, `vote_totals` materialized view, Redis live counters (worker), `/health`, `/metrics`, local Docker Compose stack |
-> | **In progress** | Frontend voting UI, SSE stream |
+> | **Implemented** | NestJS API (`POST /votes`), RabbitMQ ingest, worker batch consumer, PostgreSQL partitioned writes, `vote_totals` materialized view, Redis live counters (worker) **with startup sync from Postgres**, Next.js voting UI + SSE live stream, `/health`, `/metrics`, local Docker Compose stack (incl. frontend) |
 > | **Planned (roadmap)** | Nginx multi-zone LB, Prometheus/Grafana/k6, Proxmox deployment, chaos test suite |
 >
 > Sections marked **(implemented)** reflect the current repo. Sections marked **(planned)** describe the target Proxmox/chaos architecture — intent unchanged, not all files exist yet.
@@ -127,10 +126,10 @@ flowchart TB
     W2 -->|Batch insert| PG
     W1 -->|INCRBY counters| Redis
     W2 -->|INCRBY counters| Redis
-    SSE["Frontend SSE"] -.->|Planned| Redis
+    SSE["Frontend SSE"] -->|GET counters| Redis
 ```
 
-**Current local stack:** workers persist to PostgreSQL, refresh `vote_totals` (debounced), and increment Redis counters (`votes:tabs`, `votes:spaces`) after each successful batch flush. SSE from Redis to the browser is **planned** (see §7.3).
+**Current local stack:** workers persist to PostgreSQL, refresh `vote_totals` (debounced), and increment Redis counters (`votes:tabs`, `votes:spaces`) after each successful batch flush. On startup each worker also **seeds the Redis counters from Postgres** (only if missing) so a fresh Redis doesn't show 0. The Next.js frontend reads those counters over **SSE** and renders the live tally (see §7.3).
 
 ### Design Decisions & Rationale
 
@@ -219,10 +218,12 @@ CPU: 2 cores | RAM: 2 GB | Storage: 10 GB
 | API framework     | NestJS     | 11.x    | Stateless HTTP server with DI              | Implemented |
 | Message broker    | RabbitMQ   | 3.13    | Durable queue with acknowledgments         | Implemented |
 | Database          | PostgreSQL | 16.x    | ACID storage with native range partitioning | Implemented |
-| Cache             | Redis      | 7.2+    | In-memory counters (worker `INCRBY`)       | Partial     |
-| Frontend          | Next.js    | 16.x    | SSR, real-time updates                     | Scaffolded  |
+| Cache             | Redis      | 7.2+    | In-memory counters (worker `INCRBY`) + startup sync | Implemented |
+| Frontend          | Next.js    | 16.2    | Voting UI + SSE live counters (React 19)   | Implemented |
 | Worker runtime    | tsx        | 4.x     | TypeScript dev runner with watch mode      | Implemented |
 | Container runtime | Docker     | 24.x+   | Consistent deployments                     | Implemented |
+
+> **Client libraries (Node):** API and worker both use `amqplib@2` + `amqp-connection-manager@5` (auto-reconnect), `pg@8` (worker), and `ioredis@5` (worker + frontend). All services run on Node 22.
 
 ### Development Tools
 
@@ -241,8 +242,12 @@ CPU: 2 cores | RAM: 2 GB | Storage: 10 GB
 
 ```
 tabs-vs-spaces/
-├── frontend/                   # Next.js application (scaffold — voting UI planned)
-│   ├── src/app/               # App router (page.tsx, layout.tsx)
+├── frontend/                   # Next.js voting UI + SSE (implemented)
+│   ├── src/
+│   │   ├── app/               # page.tsx, layout.tsx
+│   │   │   └── api/           # /api/vote (proxy → API), /api/stream (SSE from Redis)
+│   │   ├── components/        # ScoreBar, VoteButtons, LiveStats
+│   │   └── lib/redis.ts       # ioredis singleton
 │   └── package.json
 │
 ├── api/                        # NestJS API (implemented)
@@ -273,7 +278,7 @@ tabs-vs-spaces/
 │   ├── prometheus/            # (planned) scrape configs
 │   └── grafana/               # (planned) dashboards
 │
-├── docker-compose.yml          # Local dev stack (implemented)
+├── docker-compose.yml          # Local dev stack incl. frontend (implemented)
 ├── docker-compose.prod.yml     # (planned) Proxmox control-plane compose
 └── README.md                   # This document
 ```
@@ -413,7 +418,7 @@ await pool.query(query, values);
 | **ACK timing** | ACK after in-memory batch (not after DB) — higher throughput, crash risk |
 | **Totals (DB)**  | Debounced `REFRESH MATERIALIZED VIEW CONCURRENTLY vote_totals` after flushes |
 | **Totals (Redis)** | Pipeline `INCRBY votes:tabs` / `votes:spaces` after successful DB flush   |
-| **Redis startup** | `connectRedis()` at boot (`lazyConnect` + explicit connect for startup log) |
+| **Redis startup** | `connectRedis()` at boot, then `seedCountersFromDb()` — `SET … NX` from Postgres counts so a fresh Redis doesn't start at 0 |
 | **Partitions** | `ensurePartitionExists()` at startup + hourly for tomorrow               |
 | **Dev runner** | `tsx watch src/main.ts` (replaces ts-node-dev)                           |
 
@@ -427,62 +432,45 @@ PostgreSQL is the **source of truth**; Redis is a **fast read cache** for the fr
 | ------- | ------------ | ------------------------- |
 | **Counter drift** | If `incrementCounters` fails (Redis down, network blip), Postgres has the vote but Redis totals lag. Failures are logged and non-fatal. | Medium for live UI; low for lab |
 | **Batch vs inserted count** | Redis increments from the full batch; `ON CONFLICT DO NOTHING` may insert fewer rows. Redis can **over-count** vs Postgres on duplicate messages. | Low while duplicates are rare |
-| **No rebuild on startup** | A fresh Redis volume starts counters at 0 while Postgres retains history. No sync-from-`vote_totals` job exists yet. | Medium after Redis wipe/redeploy |
+| **Startup rebuild** | A fresh Redis volume starts at 0 while Postgres retains history. **Fixed:** each worker runs `seedCountersFromDb()` at boot — counts rows in `votes` and writes them with `SET … NX` (only if the key is missing). | Low (handled at startup) |
 | **Dual sources** | `vote_totals` (Postgres MV) and Redis keys can disagree until reconciliation. | Expected until frontend picks one path |
 | **Optional at startup** | Redis failure at boot logs a warning; worker continues (Postgres-only mode). | Fine for resilience; confusing for debugging |
 
+#### Why `SET … NX` for the startup seed (and its limits)
+
+The seed writes **absolute** values with `SET key value NX` (set only if the key does not exist). This keeps it safe and simple:
+
+- **Multiple workers, same time** — both try to seed; `NX` means only the first write wins and the rest are no-ops. No double counting.
+- **Redis already has data** (normal restart with AOF persistence, or another worker already incremented) — `NX` skips the write, so we never overwrite newer counters with a possibly-stale DB count.
+- **Counts come from `votes` directly**, not the debounced `vote_totals` view, so the seed value is current.
+
+**Remaining edge (acceptable for a lab):** if a second worker is already consuming and creates a counter via `INCRBY` (treating a missing key as 0) *before* the historical seed runs, the `NX` seed no-ops and the base count is missed until the next full reconciliation. At lab scale this is rare and self-limited; a production system would seed once behind a short lock, or treat Redis as a TTL cache with a Postgres fallback. A full `COUNT(*)` also scans every partition — fine here, but you'd read from `vote_totals` (or a rollup table) at very large scale.
+
 **When this design is ideal:** local dev, chaos experiments, learning competing consumers — Postgres durability with sub-second display targets.
 
-**When to harden (before production UI):** increment from **actually inserted** rows (not raw batch size), add a startup job to seed Redis from `vote_totals` when keys are missing, and/or treat Redis as a TTL cache with Postgres fallback for reads.
+**When to harden further (before production UI):** increment from **actually inserted** rows (not raw batch size) to remove duplicate over-count, and/or treat Redis as a TTL cache with Postgres fallback for reads.
 
-See §7.3 for the planned SSE read path off Redis.
+See §7.3 for the SSE read path off Redis.
 
 ---
 
-### 7.3 Frontend (Visualization Layer) — **planned**
+### 7.3 Frontend (Visualization Layer) — **implemented**
 
-**Current state:** `frontend/` is a Next.js 16 scaffold (`create-next-app` boilerplate on port 4000). Not yet in `docker-compose.yml`.
+A Next.js 16 (React 19) app on port **4000**. The browser only ever talks to Next.js; Next.js talks to the API and Redis server-side. This keeps internal hostnames (e.g. `api:3000`, `redis:6379`) out of the browser.
 
-**Target design** (unchanged intent — Redis-backed SSE for live totals):
+| File | Role |
+| ---- | ---- |
+| `src/app/page.tsx` | Client page — opens an `EventSource` to `/api/stream`, auto-reconnects, renders the components |
+| `src/components/` | `ScoreBar`, `VoteButtons`, `LiveStats` (presentational) |
+| `src/app/api/vote/route.ts` | **Server proxy** — forwards the browser's `POST` to the API's `/votes` (uses `API_URL`) |
+| `src/app/api/stream/route.ts` | **SSE** — Node runtime, `force-dynamic`, polls Redis every 500 ms and streams `text/event-stream` |
+| `src/lib/redis.ts` | `ioredis` singleton (reused across hot reloads via `globalThis`) |
 
-**Vote UI:** `frontend/src/app/page.tsx` *(planned)*
+**Vote flow:** button → `POST /api/vote` (Next proxy) → API `POST /votes` → 202 Accepted. The UI optimistically marks the last choice; the real tally arrives over SSE once the worker has written to Redis.
 
-```typescript
-'use client';
+**Read flow:** worker `INCRBY` → Redis → `/api/stream` `GET` every 500 ms → SSE event → React state. If Redis was recently wiped, the worker's startup seed (§7.2) restores the base count from Postgres.
 
-export default function VotingPage() {
-  const [votes, setVotes] = useState({ tabs: 0, spaces: 0 });
-
-  useEffect(() => {
-    const eventSource = new EventSource('/api/stream');
-    eventSource.onmessage = (event) => setVotes(JSON.parse(event.data));
-    return () => eventSource.close();
-  }, []);
-
-  const handleVote = async (choice: 'tabs' | 'spaces') => {
-    await fetch('http://localhost:3000/votes', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ choice, user_id: crypto.randomUUID() }),
-    });
-  };
-
-  // Progress bar + Tabs / Spaces buttons
-}
-```
-
-**SSE stream:** `frontend/src/app/api/stream/route.ts` *(planned — reads Redis)*
-
-```typescript
-export async function GET() {
-  const redis = new Redis(process.env.REDIS_URL);
-  // Poll votes:tabs / votes:spaces every 500 ms → text/event-stream
-}
-```
-
-**Interim read path:** query `vote_totals` in PostgreSQL, or `GET votes:tabs` / `GET votes:spaces` in Redis (`redis-cli`). SSE wiring is planned. If Redis was recently wiped, counters may be lower than Postgres — see §7.2.
-
-**Real-time strategy (target):** SSE polls Redis every 500 ms — sub-second latency without WebSocket complexity. Aspirational standard: expose queue depth and consumer lag in Prometheus alongside UI latency (see §12).
+**Why SSE (not WebSocket):** counters are one-directional server→client, so SSE gives sub-second latency with far less complexity. Aspirational standard: expose queue depth and consumer lag in Prometheus alongside UI latency (see §12).
 
 ---
 
@@ -521,8 +509,11 @@ services:
 
   redis:
     image: redis:7.2-alpine
+    command: redis-server --appendonly yes   # AOF persistence across restarts
     ports:
       - "6379:6379"
+    volumes:
+      - redis_data:/data
     networks:
       - app-network
     healthcheck:
@@ -565,12 +556,34 @@ services:
       redis:
         condition: service_healthy
 
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    environment:
+      API_URL: http://api:3000      # server-side only (Next proxy → API)
+      REDIS_URL: redis://redis:6379
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./frontend/src:/app/src
+    depends_on:
+      api:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
 networks:
   app-network:
     driver: bridge
+
+volumes:
+  rabbitmq_data:
+  postgres_data:
+  redis_data:
 ```
 
-> **Note:** After adding npm dependencies to `worker/`, rebuild the image (`docker compose build worker`) and recreate the container — only `src/` is bind-mounted; `node_modules` lives in the image.
+> **Note:** After adding npm dependencies to any service, rebuild that image (e.g. `docker compose build worker`) and recreate the container — only `src/` is bind-mounted; `node_modules` lives in the image.
 
 **Production:** Services run on separate machines—no shared Docker networks. LXC1 exposes stateful ports; compute nodes use host IPs.
 
@@ -641,9 +654,11 @@ http {
         # Legacy alias — optional rewrite if clients still POST /api/vote
         location = /api/vote {
             proxy_pass http://api_backend/votes;
+        }
 
+        # Frontend (Next.js on the MacBook, port 4000)
         location / {
-            proxy_pass http://192.168.1.20:3001;
+            proxy_pass http://192.168.1.20:4000;
             proxy_http_version 1.1;
             proxy_set_header Upgrade $http_upgrade;
             proxy_set_header Connection 'upgrade';
@@ -723,12 +738,14 @@ sequenceDiagram
     Worker->>PostgreSQL: REFRESH vote_totals (debounced)
     Worker->>Redis: INCRBY votes:tabs / votes:spaces
 
-    participant SSE as Frontend SSE (planned)
-    loop Every 500 ms (planned)
-        SSE-.->Redis: GET votes:tabs / votes:spaces
-        SSE-->>User: SSE event
+    participant SSE as Frontend SSE
+    loop Every 500 ms
+        SSE->>Redis: GET votes:tabs / votes:spaces
+        SSE->>User: SSE event
     end
 ```
+
+> **Worker startup (once):** before consuming, each worker seeds Redis from Postgres with `SET … NX` so a fresh Redis shows real totals, not 0 (see §7.2).
 
 > See **§7.2 Redis dual-write concerns** for drift, duplicate, and rebuild risks between Postgres and Redis.
 
@@ -1203,18 +1220,18 @@ k6 run infra/k6/vote-storm.js
 
 ```mermaid
 gantt
-    title Implementation phases
     dateFormat YYYY-MM-DD
+    title Implementation phases
     section Phase 1
     Local Docker stack           :p1, 2026-05-25, 7d
     section Phase 2
-    Proxmox LXC deployment       :p2, after p1, 7d
+    Proxmox LXC deployment       :7d
     section Phase 3
-    Multi-zone HA (MacBook)      :p3, after p2, 7d
+    "Multi-zone HA (MacBook)"    :7d
     section Phase 4
-    Prometheus + Grafana         :p4, after p3, 7d
+    "Prometheus + Grafana"       :7d
     section Phase 5
-    Chaos testing + docs         :p5, after p4, 7d
+    "Chaos testing + docs"       :7d
 ```
 
 ### Phase 1: Local Development (Week 1) — **core complete**
@@ -1228,7 +1245,9 @@ curl -X POST http://localhost:3000/votes \
   -d '{"choice":"tabs","user_id":"550e8400-e29b-41d4-a716-446655440000"}'
 ```
 
-**Milestone:** Votes flow API → queue → worker → Postgres + Redis. Verify with `SELECT * FROM vote_totals;` and `redis-cli GET votes:tabs`. See §7.2 if Redis and Postgres totals disagree.
+Then open the UI at **http://localhost:4000** to vote and watch the live SSE tally.
+
+**Milestone:** Votes flow API → queue → worker → Postgres + Redis, and the frontend shows live totals. Verify with `SELECT * FROM vote_totals;` and `redis-cli GET votes:tabs`. See §7.2 if Redis and Postgres totals disagree.
 
 ---
 
@@ -1399,6 +1418,9 @@ curl -X POST http://localhost:3000/votes \
 # Verify persistence
 docker compose exec postgres psql -U voteuser -d votes -c "SELECT * FROM vote_totals;"
 
+# Open the live UI
+open http://localhost:4000
+
 # Proxmox
 ssh root@192.168.1.5 "cd tabs-vs-spaces && git pull && docker compose up -d"
 
@@ -1425,7 +1447,8 @@ open http://192.168.1.5:15672  # RabbitMQ Management
 | `BATCH_TIMEOUT_MS`   | Worker      | `1000`                                                  | Partial batch timeout            | Implemented |
 | `RABBITMQ_PREFETCH`  | Worker      | `100`                                                   | Max unacked messages             | Implemented |
 | `PORT`               | API         | `3000`                                                  | HTTP listen port                 | Implemented |
-| `REDIS_URL`          | Worker, Frontend | `redis://redis:6379`                                    | Live counters / SSE              | Worker: implemented |
+| `REDIS_URL`          | Worker, Frontend | `redis://redis:6379`                              | Live counters (worker) / SSE reads (frontend) | Implemented |
+| `API_URL`            | Frontend    | `http://api:3000`                                       | Server-side target for the `/api/vote` proxy (not exposed to the browser) | Implemented |
 
 See `api/.env.example` and `worker/.env.example` for local defaults.
 
@@ -1435,9 +1458,9 @@ See `api/.env.example` and `worker/.env.example` for local defaults.
 
 This project turns abstract system design into measurable engineering: load balancing with failover, async competing consumers, time-partitioned writes, chaos tests with recovery times, and dashboards backed by real metrics.
 
-**Today (Phase 1):** a vote travels API → RabbitMQ → worker → PostgreSQL, with debounced `vote_totals` refresh and Redis counter increments. Postgres is authoritative; Redis is a fast display cache with known dual-write trade-offs (§7.2).
+**Today (Phase 1):** a vote travels frontend → API → RabbitMQ → worker → PostgreSQL, with debounced `vote_totals` refresh and Redis counter increments, and the Next.js UI renders the live tally over SSE. Postgres is authoritative; Redis is a fast display cache (seeded from Postgres at startup) with known dual-write trade-offs (§7.2).
 
-**Target (Phases 2–5):** SSE live UI, Nginx multi-zone routing, full observability stack, and Proxmox chaos testing — intent unchanged.
+**Target (Phases 2–5):** Nginx multi-zone routing, full observability stack, and Proxmox chaos testing — intent unchanged.
 
 The stack is intentionally heavier than a voting app needs—because the goal is to practice patterns that scale to ledgers, feeds, and event platforms.
 
